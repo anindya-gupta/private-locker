@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#7c6aff">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Vault">
+    <link rel="manifest" href="/static/manifest.json">
+    <link rel="apple-touch-icon" href="/static/icons/vault-192.svg">
+    <title>Vault — Setup</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="auth-page">
+    <div class="auth-orb"></div>
+    <div class="auth-orb"></div>
+    <div class="auth-orb"></div>
+
+    <div class="auth-container">
+        <div class="auth-card">
+            <div class="vault-icon">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                    <circle cx="12" cy="16" r="1"/>
+                </svg>
+            </div>
+            <h1>Welcome to Vault</h1>
+            <p class="subtitle">Your encrypted personal AI assistant.<br>All data stays on your machine.</p>
+
+            <form id="setup-form">
+                <div class="form-group">
+                    <label for="password">Create Master Password</label>
+                    <input type="password" id="password" placeholder="At least 8 characters" autofocus required minlength="8">
+                </div>
+                <div class="form-group">
+                    <label for="confirm">Confirm Password</label>
+                    <input type="password" id="confirm" placeholder="Type it again" required>
+                </div>
+                <div id="error" class="error-msg"></div>
+                <button type="submit" id="submit-btn">Initialize Vault</button>
+            </form>
+
+            <p class="warning">If you forget this password, your data is permanently lost. There is no recovery mechanism.</p>
+        </div>
+    </div>
+
+    <script>
+        const form = document.getElementById('setup-form');
+        const errorEl = document.getElementById('error');
+        const btn = document.getElementById('submit-btn');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            errorEl.textContent = '';
+
+            const pw = document.getElementById('password').value;
+            const confirm = document.getElementById('confirm').value;
+
+            if (pw.length < 8) { errorEl.textContent = 'Password must be at least 8 characters.'; return; }
+            if (pw !== confirm) { errorEl.textContent = 'Passwords do not match.'; return; }
+
+            btn.disabled = true;
+            btn.textContent = 'Initializing...';
+
+            try {
+                const resp = await fetch('/api/init', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({password: pw}),
+                });
+                if (resp.ok) {
+                    document.querySelector('.auth-container').style.animation = 'authExit 0.4s ease forwards';
+                    setTimeout(() => { window.location.href = '/'; }, 350);
+                } else {
+                    const data = await resp.json();
+                    errorEl.textContent = data.detail || 'Failed to initialize.';
+                }
+            } catch {
+                errorEl.textContent = 'Connection error.';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Initialize Vault';
+            }
+        });
+    </script>
+    <style>
+        @keyframes authExit { to { opacity: 0; transform: translateY(-20px) scale(0.95); } }
+    </style>
+</body>
+</html>

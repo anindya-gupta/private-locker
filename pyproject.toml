@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vault-ai"
+version = "0.1.0"
+description = "Secure, local-first personal AI agent for documents, credentials, and personal memory"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "typer[all]>=0.9.0",
+    "rich>=13.0.0",
+    "cryptography>=41.0.0",
+    "argon2-cffi>=23.1.0",
+    "chromadb>=0.4.0",
+    "sentence-transformers>=2.2.0",
+    "litellm>=1.0.0",
+    "PyMuPDF>=1.23.0",
+    "pytesseract>=0.3.10",
+    "Pillow>=10.0.0",
+    "python-multipart>=0.0.6",
+    "jinja2>=3.1.0",
+    "pyyaml>=6.0.0",
+    "aiofiles>=23.0.0",
+    "mcp[cli]>=1.0.0",
+]
+
+[project.scripts]
+vault = "vault.cli:main"
+vault-mcp = "vault.mcp_server:run_mcp_server"
+
+[tool.setuptools.packages.find]
+include = ["vault*"]

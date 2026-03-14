@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#7c6aff">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Vault">
+    <link rel="manifest" href="/static/manifest.json">
+    <link rel="apple-touch-icon" href="/static/icons/vault-192.svg">
+    <title>Vault — Unlock</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="auth-page">
+    <div class="auth-orb"></div>
+    <div class="auth-orb"></div>
+    <div class="auth-orb"></div>
+
+    <div class="auth-container">
+        <div class="auth-card">
+            <div class="vault-icon locked">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                    <circle cx="12" cy="16" r="1"/>
+                </svg>
+            </div>
+            <h1>Vault Locked</h1>
+            <p class="subtitle">Enter your master password to access your data.</p>
+
+            <form id="unlock-form">
+                <div class="form-group">
+                    <label for="password">Master Password</label>
+                    <input type="password" id="password" placeholder="Enter your password" autofocus required>
+                </div>
+                <div id="error" class="error-msg"></div>
+                <button type="submit" id="submit-btn">Unlock</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const form = document.getElementById('unlock-form');
+        const errorEl = document.getElementById('error');
+        const btn = document.getElementById('submit-btn');
+        const pwField = document.getElementById('password');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            errorEl.textContent = '';
+            const pw = pwField.value;
+            if (!pw) return;
+
+            btn.disabled = true;
+            btn.textContent = 'Unlocking...';
+
+            try {
+                const resp = await fetch('/api/unlock', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({password: pw}),
+                });
+                if (resp.ok) {
+                    document.querySelector('.auth-container').style.animation = 'authExit 0.4s ease forwards';
+                    setTimeout(() => { window.location.href = '/'; }, 350);
+                } else {
+                    errorEl.textContent = 'Incorrect password. Try again.';
+                    pwField.value = '';
+                    pwField.focus();
+                    pwField.style.animation = 'none';
+                    requestAnimationFrame(() => { pwField.style.animation = 'shake 0.4s ease'; });
+                }
+            } catch {
+                errorEl.textContent = 'Connection error.';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Unlock';
+            }
+        });
+    </script>
+    <style>
+        @keyframes authExit { to { opacity: 0; transform: translateY(-20px) scale(0.95); } }
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            20% { transform: translateX(-6px); }
+            40% { transform: translateX(6px); }
+            60% { transform: translateX(-4px); }
+            80% { transform: translateX(4px); }
+        }
+    </style>
+</body>
+</html>

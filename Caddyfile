@@ -1,0 +1,10 @@
+# Replace vault.yourdomain.com with your actual domain
+{$VAULT_DOMAIN:vault.yourdomain.com} {
+    reverse_proxy vault:8080
+
+    encode gzip
+
+    header {
+        -Server
+    }
+}
