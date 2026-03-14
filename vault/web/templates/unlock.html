@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <meta name="theme-color" content="#7c6aff">
+    <meta name="theme-color" content="#050507">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Vault">
@@ -13,16 +13,13 @@
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body class="auth-page">
-    <div class="auth-orb"></div>
-    <div class="auth-orb"></div>
-    <div class="auth-orb"></div>
 
     <div class="auth-container">
-        <div class="auth-card">
-            <div class="vault-icon locked">
+        <div class="auth-card" id="auth-card">
+            <div class="vault-icon locked" id="lock-icon">
                 <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                     <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                    <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                    <path id="shackle" d="M7 11V7a5 5 0 0 1 10 0v4"/>
                     <circle cx="12" cy="16" r="1"/>
                 </svg>
             </div>
@@ -63,21 +60,17 @@
                     body: JSON.stringify({password: pw}),
                 });
                 if (resp.ok) {
-                    window.playUnlockAnimation(() => {
+                    if (window.playUnlockAnimation) {
+                        window.playUnlockAnimation(() => { window.location.href = '/'; });
+                    } else {
                         window.location.href = '/';
-                    });
+                    }
                 } else {
                     errorEl.textContent = 'Incorrect password. Try again.';
                     pwField.value = '';
                     pwField.focus();
-                    pwField.style.animation = 'none';
-                    requestAnimationFrame(() => { pwField.style.animation = 'shake 0.4s ease'; });
-
-                    const icon = document.querySelector('.vault-icon');
-                    if (icon) {
-                        icon.style.animation = 'none';
-                        requestAnimationFrame(() => { icon.style.animation = 'shake 0.4s ease'; });
-                    }
+                    shakeElement(pwField);
+                    shakeElement(document.getElementById('lock-icon'));
                 }
             } catch {
                 errorEl.textContent = 'Connection error.';
@@ -86,6 +79,12 @@
                 btn.textContent = 'Unlock';
             }
         });
+
+        function shakeElement(el) {
+            if (!el) return;
+            el.style.animation = 'none';
+            requestAnimationFrame(() => { el.style.animation = 'shake 0.4s ease'; });
+        }
     </script>
     <style>
         @keyframes authExit { to { opacity: 0; transform: translateY(-30px) scale(0.9); } }

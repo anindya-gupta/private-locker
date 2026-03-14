@@ -1,7 +1,8 @@
-const CACHE_NAME = 'vault-v1';
+const CACHE_NAME = 'vault-v2';
 const SHELL_ASSETS = [
     '/static/css/style.css',
     '/static/js/app.js',
+    '/static/js/auth-effects.js',
     '/static/manifest.json',
     '/static/icons/vault-192.svg',
     '/static/icons/vault-512.svg',
