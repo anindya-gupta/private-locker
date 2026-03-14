@@ -31,7 +31,7 @@
                 this.speedY = (Math.random() - 0.5) * 0.15;
                 this.baseOpacity = Math.random() * 0.25 + 0.05;
                 this.opacity = this.baseOpacity;
-                this.hue = Math.random() > 0.65 ? 258 : 155;
+                this.hue = Math.random() > 0.65 ? 43 : 155;
                 this.pulseSpeed = Math.random() * 0.008 + 0.003;
                 this.pulsePhase = Math.random() * Math.PI * 2;
             }
@@ -94,7 +94,7 @@
                         ctx.beginPath();
                         ctx.moveTo(particles[i].x, particles[i].y);
                         ctx.lineTo(particles[j].x, particles[j].y);
-                        ctx.strokeStyle = `rgba(139, 122, 255, ${opacity})`;
+                        ctx.strokeStyle = `rgba(201, 168, 76, ${opacity})`;
                         ctx.lineWidth = 0.4;
                         ctx.stroke();
                     }

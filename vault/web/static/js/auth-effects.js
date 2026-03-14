@@ -32,7 +32,7 @@
             this.vy = (Math.random() - 0.5) * 0.2;
             this.baseAlpha = Math.random() * 0.3 + 0.05;
             this.alpha = this.baseAlpha;
-            this.hue = Math.random() > 0.6 ? 258 : 155;
+            this.hue = Math.random() > 0.6 ? 43 : 155;
         }
 
         update() {
@@ -79,7 +79,7 @@
                     ctx.beginPath();
                     ctx.moveTo(particles[i].x, particles[i].y);
                     ctx.lineTo(particles[j].x, particles[j].y);
-                    ctx.strokeStyle = `rgba(139, 122, 255, ${(1 - d / 100) * 0.04})`;
+                    ctx.strokeStyle = `rgba(201, 168, 76, ${(1 - d / 100) * 0.04})`;
                     ctx.lineWidth = 0.4;
                     ctx.stroke();
                 }
@@ -160,8 +160,8 @@
 
         if (shackle && icon) {
             icon.classList.add('unlocked');
-            icon.style.color = '#3dd68c';
-            icon.style.background = 'rgba(61, 214, 140, 0.1)';
+            icon.style.color = '#5eca8a';
+            icon.style.background = 'rgba(94, 202, 138, 0.1)';
             shackle.style.transform = 'rotate(-30deg) translateY(-4px)';
         }
 
@@ -177,7 +177,7 @@
     function spawnConfetti() {
         const cx = W() / 2;
         const cy = H() / 2 - 30;
-        const colors = ['#8b7aff', '#3dd68c', '#f06090', '#f0b040', '#60c0f0'];
+        const colors = ['#c9a84c', '#d4b85c', '#5eca8a', '#e8d5a0', '#b0913e'];
 
         for (let i = 0; i < 40; i++) {
             const dot = document.createElement('div');
@@ -210,7 +210,7 @@
         ripple.style.cssText = `
             position:fixed; left:${e.clientX}px; top:${e.clientY}px;
             width:0; height:0; border-radius:50%; pointer-events:none; z-index:1;
-            background: radial-gradient(circle, rgba(139,122,255,0.1), transparent 70%);
+            background: radial-gradient(circle, rgba(201,168,76,0.08), transparent 70%);
             transform: translate(-50%,-50%);
             animation: clickRipple 0.7s ease-out forwards;
         `;

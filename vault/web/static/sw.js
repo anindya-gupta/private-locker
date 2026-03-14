@@ -1,4 +1,4 @@
-const CACHE_NAME = 'vault-v2';
+const CACHE_NAME = 'vault-v3';
 const SHELL_ASSETS = [
     '/static/css/style.css',
     '/static/js/app.js',

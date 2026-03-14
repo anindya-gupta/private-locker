@@ -10,7 +10,7 @@
     <link rel="manifest" href="/static/manifest.json">
     <link rel="apple-touch-icon" href="/static/icons/vault-192.svg">
     <title>Vault</title>
-    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/style.css?v=3">
 </head>
 <body>
     <canvas id="ambient-canvas"></canvas>
@@ -207,7 +207,7 @@ Everything is encrypted locally. How can I help?</div>
         </div>
     </div>
 
-    <script src="/static/js/app.js"></script>
+    <script src="/static/js/app.js?v=3"></script>
     <script>
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('/static/sw.js').catch(() => {});
