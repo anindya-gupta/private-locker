@@ -40,6 +40,7 @@
         </div>
     </div>
 
+    <script src="/static/js/auth-effects.js"></script>
     <script>
         const form = document.getElementById('unlock-form');
         const errorEl = document.getElementById('error');
@@ -62,14 +63,21 @@
                     body: JSON.stringify({password: pw}),
                 });
                 if (resp.ok) {
-                    document.querySelector('.auth-container').style.animation = 'authExit 0.4s ease forwards';
-                    setTimeout(() => { window.location.href = '/'; }, 350);
+                    window.playUnlockAnimation(() => {
+                        window.location.href = '/';
+                    });
                 } else {
                     errorEl.textContent = 'Incorrect password. Try again.';
                     pwField.value = '';
                     pwField.focus();
                     pwField.style.animation = 'none';
                     requestAnimationFrame(() => { pwField.style.animation = 'shake 0.4s ease'; });
+
+                    const icon = document.querySelector('.vault-icon');
+                    if (icon) {
+                        icon.style.animation = 'none';
+                        requestAnimationFrame(() => { icon.style.animation = 'shake 0.4s ease'; });
+                    }
                 }
             } catch {
                 errorEl.textContent = 'Connection error.';
@@ -80,13 +88,13 @@
         });
     </script>
     <style>
-        @keyframes authExit { to { opacity: 0; transform: translateY(-20px) scale(0.95); } }
+        @keyframes authExit { to { opacity: 0; transform: translateY(-30px) scale(0.9); } }
         @keyframes shake {
             0%, 100% { transform: translateX(0); }
-            20% { transform: translateX(-6px); }
-            40% { transform: translateX(6px); }
-            60% { transform: translateX(-4px); }
-            80% { transform: translateX(4px); }
+            20% { transform: translateX(-8px); }
+            40% { transform: translateX(8px); }
+            60% { transform: translateX(-5px); }
+            80% { transform: translateX(5px); }
         }
     </style>
 </body>

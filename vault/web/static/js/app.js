@@ -25,11 +25,13 @@
             reset() {
                 this.x = Math.random() * canvas.width;
                 this.y = Math.random() * canvas.height;
-                this.size = Math.random() * 1.5 + 0.3;
-                this.speedX = (Math.random() - 0.5) * 0.15;
-                this.speedY = (Math.random() - 0.5) * 0.15;
-                this.opacity = Math.random() * 0.4 + 0.1;
-                this.hue = Math.random() > 0.6 ? 260 : 170;
+                this.baseSize = Math.random() * 1.5 + 0.5;
+                this.size = this.baseSize;
+                this.speedX = (Math.random() - 0.5) * 0.2;
+                this.speedY = (Math.random() - 0.5) * 0.2;
+                this.baseOpacity = Math.random() * 0.35 + 0.1;
+                this.opacity = this.baseOpacity;
+                this.hue = Math.random() > 0.6 ? 258 : 172;
                 this.pulseSpeed = Math.random() * 0.01 + 0.005;
                 this.pulsePhase = Math.random() * Math.PI * 2;
             }
@@ -41,13 +43,19 @@
                 const dx = mouse.x - this.x;
                 const dy = mouse.y - this.y;
                 const dist = Math.sqrt(dx * dx + dy * dy);
-                if (dist < 150) {
-                    const force = (150 - dist) / 150 * 0.3;
-                    this.x -= dx * force * 0.01;
-                    this.y -= dy * force * 0.01;
+
+                if (dist < 200) {
+                    const force = (200 - dist) / 200;
+                    this.x += dx * force * 0.01;
+                    this.y += dy * force * 0.01;
+                    this.opacity = this.baseOpacity + force * 0.5;
+                    this.size = this.baseSize + force * 2;
+                } else {
+                    this.opacity += (this.baseOpacity - this.opacity) * 0.05;
+                    this.size += (this.baseSize - this.size) * 0.05;
                 }
 
-                this.opacity = (Math.sin(time * this.pulseSpeed + this.pulsePhase) + 1) * 0.2 + 0.05;
+                this.opacity *= (Math.sin(time * this.pulseSpeed + this.pulsePhase) * 0.15 + 0.85);
 
                 if (this.x < -10 || this.x > canvas.width + 10 ||
                     this.y < -10 || this.y > canvas.height + 10) {
@@ -58,8 +66,14 @@
             draw() {
                 ctx.beginPath();
                 ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
-                ctx.fillStyle = `hsla(${this.hue}, 70%, 70%, ${this.opacity})`;
+                ctx.fillStyle = `hsla(${this.hue}, 80%, 70%, ${this.opacity})`;
                 ctx.fill();
+                if (this.size > 2) {
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.size * 2.5, 0, Math.PI * 2);
+                    ctx.fillStyle = `hsla(${this.hue}, 80%, 70%, ${this.opacity * 0.1})`;
+                    ctx.fill();
+                }
             }
         }
 
@@ -78,12 +92,27 @@
                     const dy = particles[i].y - particles[j].y;
                     const dist = Math.sqrt(dx * dx + dy * dy);
 
-                    if (dist < 120) {
-                        const opacity = (1 - dist / 120) * 0.06;
+                    if (dist < 130) {
+                        const opacity = (1 - dist / 130) * 0.08;
                         ctx.beginPath();
                         ctx.moveTo(particles[i].x, particles[i].y);
                         ctx.lineTo(particles[j].x, particles[j].y);
                         ctx.strokeStyle = `rgba(124, 106, 255, ${opacity})`;
+                        ctx.lineWidth = 0.5;
+                        ctx.stroke();
+                    }
+                }
+
+                if (mouse.x > 0) {
+                    const dx = mouse.x - particles[i].x;
+                    const dy = mouse.y - particles[i].y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    if (dist < 180) {
+                        const opacity = (1 - dist / 180) * 0.1;
+                        ctx.beginPath();
+                        ctx.moveTo(particles[i].x, particles[i].y);
+                        ctx.lineTo(mouse.x, mouse.y);
+                        ctx.strokeStyle = `rgba(94, 234, 212, ${opacity})`;
                         ctx.lineWidth = 0.5;
                         ctx.stroke();
                     }
