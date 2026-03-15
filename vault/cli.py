@@ -319,7 +319,7 @@ def serve(
     port: int = typer.Option(8000, help="Port to listen on"),
 ):
     """Start the Vault web UI server."""
-    _ensure_initialized()
+    config.ensure_dirs()
     rprint(Panel(
         f"Starting Vault web UI at [bold]http://{host}:{port}[/bold]\n"
         "Press Ctrl+C to stop.",
