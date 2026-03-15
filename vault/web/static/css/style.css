@@ -749,7 +749,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important;
 /* ===== Dashboard Stats ===== */
 .dashboard-stats {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
     gap: 0.75rem;
     padding: 1rem 1.5rem 0;
     flex-shrink: 0;
@@ -807,6 +807,117 @@ button:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important;
     letter-spacing: 0.08em;
     font-weight: 600;
     margin-top: 0.15rem;
+}
+
+.stat-card-birthday .stat-icon {
+    background: rgba(255, 152, 67, 0.12);
+    color: #ff9843;
+}
+
+.stat-card:nth-child(5) { animation-delay: 0.25s; }
+
+/* ===== Birthday Widget ===== */
+.birthday-widget {
+    margin: 0 1.5rem 0.75rem;
+    background: var(--glass);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--r-lg);
+    overflow: hidden;
+    animation: msgIn 0.5s var(--ease-spring) 0.3s both;
+}
+
+.birthday-widget-header {
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--glass-border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.birthday-widget-header h3 {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-2);
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0;
+}
+
+.birthday-widget-header h3 svg { color: #ff9843; }
+
+.birthday-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.birthday-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 1rem;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    transition: background 0.2s;
+}
+
+.birthday-item:last-child { border-bottom: none; }
+
+.birthday-item:hover { background: rgba(255,255,255,0.02); }
+
+.bday-icon {
+    font-size: 1.25rem;
+    flex-shrink: 0;
+    width: 32px;
+    text-align: center;
+}
+
+.bday-info { flex: 1; min-width: 0; }
+
+.bday-name {
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: var(--text-1);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bday-date {
+    font-size: 0.72rem;
+    color: var(--text-3);
+    margin-top: 0.1rem;
+}
+
+.bday-badge {
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 0.2rem 0.55rem;
+    border-radius: 20px;
+    white-space: nowrap;
+    background: rgba(255,255,255,0.06);
+    color: var(--text-3);
+    flex-shrink: 0;
+}
+
+.bday-today {
+    background: rgba(255, 59, 48, 0.15);
+    color: #ff3b30;
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+.bday-tomorrow {
+    background: rgba(255, 152, 67, 0.12);
+    color: #ff9843;
+}
+
+.bday-soon {
+    background: rgba(88, 166, 255, 0.12);
+    color: #58a6ff;
+}
+
+.bday-highlight {
+    background: rgba(255, 152, 67, 0.05);
+    border-left: 2px solid #ff9843;
 }
 
 .view {
@@ -1548,6 +1659,8 @@ button:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important;
 
     .stat-card { padding: 0.75rem; }
     .stat-value { font-size: 1.35rem; }
+
+    .birthday-widget { margin: 0 0.75rem 0.5rem; }
 
     .messages { padding: 1rem 0.75rem 0.75rem; }
     .chat-input-area { padding: 0.35rem 0.75rem 0.75rem; }

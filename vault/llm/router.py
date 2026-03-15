@@ -114,3 +114,20 @@ class LLMRouter:
             return []
         except (json.JSONDecodeError, IndexError):
             return []
+
+    async def extract_birthdays(self, message: str) -> list[dict[str, str]]:
+        from vault.llm.prompts import BIRTHDAY_EXTRACTION_PROMPT
+
+        prompt = BIRTHDAY_EXTRACTION_PROMPT.format(message=message)
+        response = await self.complete(prompt, temperature=0.1, max_tokens=2048)
+
+        try:
+            cleaned = response.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.split("\n", 1)[1].rsplit("```", 1)[0]
+            entries = json.loads(cleaned)
+            if isinstance(entries, list):
+                return [e for e in entries if e.get("name") and e.get("date")]
+            return []
+        except (json.JSONDecodeError, IndexError):
+            return []

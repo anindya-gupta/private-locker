@@ -468,10 +468,57 @@ async def api_stats(request: Request):
     doc_count = conn.execute("SELECT COUNT(*) as c FROM documents").fetchone()["c"]
     cred_count = conn.execute("SELECT COUNT(*) as c FROM credentials").fetchone()["c"]
     fact_count = conn.execute("SELECT COUNT(*) as c FROM facts").fetchone()["c"]
+    birthday_count = conn.execute("SELECT COUNT(*) as c FROM facts WHERE category = 'birthday'").fetchone()["c"]
+
+    upcoming = 0
+    if birthday_count > 0:
+        from datetime import datetime
+        bdays = agent.memory.list_all(s.keys.db_key, category="birthday")
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        for b in bdays:
+            parsed = agent._parse_birthday_date(b["value"])
+            if parsed:
+                this_year = parsed.replace(year=today.year)
+                if this_year < today:
+                    this_year = this_year.replace(year=today.year + 1)
+                if (this_year - today).days <= 30:
+                    upcoming += 1
 
     return {
         "documents": doc_count,
         "credentials": cred_count,
         "facts": fact_count,
         "active_sessions": session_store.active_count(),
+        "total_birthdays": birthday_count,
+        "upcoming_birthdays": upcoming,
     }
+
+
+@app.get("/api/birthdays")
+async def api_birthdays(request: Request):
+    s = _require_session(request)
+    if not agent or not agent.db._conn:
+        raise HTTPException(500, "Database not available")
+
+    from datetime import datetime
+
+    bdays = agent.memory.list_all(s.keys.db_key, category="birthday")
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    result = []
+
+    for b in bdays:
+        parsed = agent._parse_birthday_date(b["value"])
+        days_until = None
+        if parsed:
+            this_year = parsed.replace(year=today.year)
+            if this_year < today:
+                this_year = this_year.replace(year=today.year + 1)
+            days_until = (this_year - today).days
+        result.append({
+            "name": b["key"].title(),
+            "date": b["value"],
+            "days_until": days_until,
+        })
+
+    result.sort(key=lambda x: (x["days_until"] if x["days_until"] is not None else 9999))
+    return {"birthdays": result}

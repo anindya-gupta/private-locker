@@ -104,6 +104,21 @@
                     <div class="stat-value" id="stat-sessions">-</div>
                     <div class="stat-label">Sessions</div>
                 </div>
+                <div class="stat-card stat-card-birthday" data-stat="birthdays" id="birthday-stat-card" style="display:none">
+                    <div class="stat-icon">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20 21v-2a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v2"/><path d="M12 15V4"/><path d="M8 11h8a4 4 0 0 1 4 4H4a4 4 0 0 1 4-4z"/><path d="M12 4c0-1 .5-2 1.5-2S15 2 15 3s-1 1.5-2 2-1.5 1-1 2"/></svg>
+                    </div>
+                    <div class="stat-value" id="stat-birthdays">-</div>
+                    <div class="stat-label">Upcoming Birthdays</div>
+                </div>
+            </div>
+
+            <!-- Birthday Widget (shown on dashboard when there are upcoming birthdays) -->
+            <div id="birthday-widget" class="birthday-widget" style="display:none">
+                <div class="birthday-widget-header">
+                    <h3><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20 21v-2a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v2"/><path d="M12 15V4"/><path d="M8 11h8a4 4 0 0 1 4 4H4a4 4 0 0 1 4-4z"/><path d="M12 4c0-1 .5-2 1.5-2S15 2 15 3s-1 1.5-2 2-1.5 1-1 2"/></svg> Upcoming Birthdays</h3>
+                </div>
+                <div id="birthday-list" class="birthday-list"></div>
             </div>
 
             <!-- Chat View -->

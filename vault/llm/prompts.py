@@ -29,6 +29,8 @@ Possible intents:
 - "retrieve_credential": User asks for a stored login/password
 - "remember_fact": User STATES a concrete fact to remember (e.g., "my blood type is O+", "remember I'm allergic to peanuts")
 - "recall_fact": User asks about a specific personal fact they previously stored
+- "store_birthdays": User provides one or more birthday entries (e.g., "Save birthday: John, March 15", "Here are some birthdays: John - March 15, Sarah - April 2")
+- "recall_birthdays": User asks about upcoming birthdays, someone's birthday, or birthday list
 - "list_items": User wants to see what's stored
 - "delete_item": User wants to remove something
 - "general": General conversation, questions about capabilities, greetings, or unclear intent
@@ -67,3 +69,20 @@ Examples:
 If no facts to extract, return [].
 
 Facts:"""
+
+BIRTHDAY_EXTRACTION_PROMPT = """The user wants to store birthday information. Extract ALL birthdays from the text below.
+
+Return a JSON array where each item has "name" (person's name) and "date" (their birthday).
+Normalize dates to "Month Day" format (e.g. "March 15", "January 2", "December 25").
+If a year is included, keep it (e.g. "March 15, 1990").
+
+Handle any format:
+- "John - March 15, Sarah - April 2"
+- "John 03/15, Sarah 04/02"
+- "John: March 15\\nSarah: April 2"
+- "John,March 15\\nSarah,April 2"
+- "John birthday is March 15 and Sarah birthday is April 2"
+
+Text: "{message}"
+
+JSON array:"""

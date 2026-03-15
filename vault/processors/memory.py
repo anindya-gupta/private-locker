@@ -47,6 +47,27 @@ class MemoryManager:
     def forget(self, fact_id: str) -> bool:
         return self._db.delete_fact(fact_id)
 
+    def store_birthdays_bulk(
+        self,
+        entries: list[dict[str, str]],
+        encryption_key: bytes,
+    ) -> int:
+        """Store multiple birthday entries. Each entry: {name, date}. Returns count stored."""
+        count = 0
+        for entry in entries:
+            name = entry.get("name", "").strip()
+            date_str = entry.get("date", "").strip()
+            if name and date_str:
+                self._db.store_fact(
+                    key=name.lower(),
+                    value=date_str,
+                    encryption_key=encryption_key,
+                    category="birthday",
+                    source="user",
+                )
+                count += 1
+        return count
+
     @staticmethod
     def parse_remember_input(text: str) -> tuple[Optional[str], Optional[str], str]:
         """
@@ -96,9 +117,11 @@ class MemoryManager:
 
 def _guess_fact_category(key: str) -> str:
     lower = key.lower()
+    if any(kw in lower for kw in ["birthday", "birth date", "birthdate", "bday", "dob"]):
+        return "birthday"
     categories = {
         "medical": ["blood", "allergy", "allergic", "medication", "doctor", "hospital", "condition", "diagnosis"],
-        "personal": ["birthday", "birth", "age", "name", "address", "phone", "email", "spouse", "partner"],
+        "personal": ["birth", "age", "name", "address", "phone", "email", "spouse", "partner"],
         "financial": ["bank", "account", "salary", "income", "pan", "tax"],
         "preferences": ["like", "prefer", "favorite", "colour", "color", "food", "hobby"],
         "work": ["company", "job", "office", "manager", "designation", "employee"],

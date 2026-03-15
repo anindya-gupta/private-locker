@@ -10,9 +10,12 @@ Routes user queries to the right handler:
 
 from __future__ import annotations
 
+import csv
+import io
 import logging
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Optional
 
 from vault.config import VaultConfig
@@ -69,6 +72,8 @@ class VaultAgent:
         keys = self.session.keys
 
         if file_data and file_name:
+            if file_name.lower().endswith(".csv") and self._looks_like_birthday_file(file_data):
+                return self._handle_birthday_csv(file_data, keys)
             return await self._handle_store_document(message, file_data, file_name, keys)
 
         local_result = self._try_local_resolution(message, keys)
@@ -84,6 +89,8 @@ class VaultAgent:
             "retrieve_credential": self._handle_retrieve_credential,
             "remember_fact": self._handle_remember_fact,
             "recall_fact": self._handle_recall_fact,
+            "store_birthdays": self._handle_store_birthdays,
+            "recall_birthdays": self._handle_recall_birthdays,
             "query_document": self._handle_query_document,
             "retrieve_document": self._handle_retrieve_document,
             "store_document": self._handle_store_document_prompt,
@@ -142,6 +149,36 @@ class VaultAgent:
                     category = MemoryManager.parse_remember_input(message)[2]
                     self.memory.remember(key, value, keys.db_key, category)
                     return AgentResponse(text=f"Got it! I'll remember that your {key} is {value}.")
+
+        birthday_patterns = [
+            r"(?:save|store|add|remember)\s+birthday\s*:\s*(.+?)\s*[,\-]\s*(.+)",
+            r"(?:save|store|add|remember)\s+(.+?)(?:'s|s)\s+birthday\s+(?:on|is|as|:)\s+(.+)",
+            r"(.+?)(?:'s|s)\s+birthday\s+(?:is|on)\s+(.+)",
+            r"(?:save|store|add|remember)\s+(?:that\s+)?(.+?)\s+(?:birthday|bday)\s+(?:is|on)\s+(.+)",
+            r"birthday\s*:\s*(.+?)\s*[,\-]\s*(.+)",
+        ]
+        for bp in birthday_patterns:
+            birthday_save = re.match(bp, lower)
+            if birthday_save:
+                name = birthday_save.group(1).strip().rstrip("'s").rstrip("s ")
+                date_str = birthday_save.group(2).strip().rstrip(".")
+                self.memory.store_birthdays_bulk([{"name": name, "date": date_str}], keys.db_key)
+                return AgentResponse(text=f"Saved {name.title()}'s birthday ({date_str}).")
+
+        if lower in ("list birthdays", "show birthdays", "show my birthdays", "upcoming birthdays", "birthdays"):
+            bdays = self.memory.list_all(keys.db_key, category="birthday")
+            if not bdays:
+                return AgentResponse(text="No birthdays stored yet. You can add one with: save birthday: John, March 15")
+            return AgentResponse(text=self._format_birthday_list(bdays))
+
+        bday_query = re.search(r"when\s+is\s+(.+?)(?:'s|s)\s+birthday", lower)
+        if bday_query:
+            name_q = bday_query.group(1).strip().lower()
+            bdays = self.memory.list_all(keys.db_key, category="birthday")
+            for b in bdays:
+                if name_q in b["key"]:
+                    return AgentResponse(text=f"{b['key'].title()}'s birthday is {b['value']}.")
+            return AgentResponse(text=f"I don't have a birthday stored for '{name_q.title()}'.")
 
         if lower in ("list credentials", "show credentials", "show my passwords", "list passwords"):
             creds = self.cred_manager.list_all(keys.cred_key)
@@ -409,6 +446,125 @@ class VaultAgent:
             return AgentResponse(text=answer, data={"source_document": doc["name"]})
 
         return None
+
+    async def _handle_store_birthdays(self, message: str, entities: dict, keys: Any) -> AgentResponse:
+        """Handle storing one or more birthdays from a chat message."""
+        entries = await self.llm.extract_birthdays(message)
+        if not entries:
+            return AgentResponse(
+                text="I couldn't parse any birthdays from that. Try a format like:\n"
+                     "  save birthday: John, March 15\n"
+                     "or paste a list:\n"
+                     "  John - March 15\n"
+                     "  Sarah - April 2"
+            )
+        count = self.memory.store_birthdays_bulk(entries, keys.db_key)
+        if count == 1:
+            e = entries[0]
+            return AgentResponse(text=f"Saved {e['name'].title()}'s birthday ({e['date']}).")
+        names = ", ".join(e["name"].title() for e in entries[:5])
+        suffix = f" and {count - 5} more" if count > 5 else ""
+        return AgentResponse(text=f"Saved {count} birthdays: {names}{suffix}.")
+
+    async def _handle_recall_birthdays(self, message: str, entities: dict, keys: Any) -> AgentResponse:
+        """Handle queries about birthdays."""
+        bdays = self.memory.list_all(keys.db_key, category="birthday")
+        if not bdays:
+            return AgentResponse(text="No birthdays stored yet. You can add one with: save birthday: John, March 15")
+
+        name_query = entities.get("key", "")
+        if not name_query:
+            match = re.search(r"(?:when is|what is)\s+(\w[\w\s]*?)(?:'s)?\s+birthday", message, re.IGNORECASE)
+            if match:
+                name_query = match.group(1).strip().lower()
+
+        if name_query:
+            for b in bdays:
+                if name_query in b["key"]:
+                    return AgentResponse(text=f"{b['key'].title()}'s birthday is {b['value']}.")
+            return AgentResponse(text=f"I don't have a birthday stored for '{name_query.title()}'.")
+
+        return AgentResponse(text=self._format_birthday_list(bdays))
+
+    def _format_birthday_list(self, bdays: list[dict[str, Any]]) -> str:
+        today = datetime.now()
+        upcoming = []
+        for b in bdays:
+            parsed = self._parse_birthday_date(b["value"])
+            if parsed:
+                this_year = parsed.replace(year=today.year)
+                if this_year < today.replace(hour=0, minute=0, second=0, microsecond=0):
+                    this_year = this_year.replace(year=today.year + 1)
+                days_until = (this_year - today.replace(hour=0, minute=0, second=0, microsecond=0)).days
+                upcoming.append((days_until, b["key"].title(), b["value"], this_year))
+            else:
+                upcoming.append((9999, b["key"].title(), b["value"], None))
+
+        upcoming.sort(key=lambda x: x[0])
+        lines = [f"Birthdays ({len(upcoming)}):"]
+        for days_until, name, date_str, dt in upcoming:
+            if days_until == 0:
+                tag = " (TODAY!)"
+            elif days_until == 1:
+                tag = " (tomorrow)"
+            elif days_until <= 30:
+                tag = f" (in {days_until} days)"
+            else:
+                tag = ""
+            lines.append(f"  - {name}: {date_str}{tag}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _parse_birthday_date(date_str: str) -> Optional[datetime]:
+        cleaned = re.sub(r"(\d+)(st|nd|rd|th)\b", r"\1", date_str.strip())
+        formats = [
+            "%B %d", "%B %d, %Y", "%b %d", "%b %d, %Y",
+            "%d %B", "%d %B, %Y", "%d %b", "%d %b, %Y",
+            "%m/%d", "%m/%d/%Y", "%d-%m", "%d-%m-%Y",
+            "%d %m", "%m %d",
+        ]
+        for fmt in formats:
+            try:
+                dt = datetime.strptime(cleaned, fmt)
+                if dt.year == 1900:
+                    dt = dt.replace(year=datetime.now().year)
+                return dt
+            except ValueError:
+                continue
+        return None
+
+    @staticmethod
+    def _looks_like_birthday_file(file_data: bytes) -> bool:
+        try:
+            text = file_data.decode("utf-8")[:1000].lower()
+            return any(kw in text for kw in ["birthday", "birth", "dob", "date", "name"])
+        except UnicodeDecodeError:
+            return False
+
+    def _handle_birthday_csv(self, file_data: bytes, keys: Any) -> AgentResponse:
+        try:
+            text = file_data.decode("utf-8")
+        except UnicodeDecodeError:
+            return AgentResponse(text="Could not read the CSV file. Please ensure it's UTF-8 encoded.")
+
+        reader = csv.DictReader(io.StringIO(text))
+        entries = []
+        for row in reader:
+            name = row.get("name") or row.get("Name") or row.get("NAME") or ""
+            date_val = (
+                row.get("birthday") or row.get("Birthday") or row.get("date")
+                or row.get("Date") or row.get("dob") or row.get("DOB") or ""
+            )
+            if name.strip() and date_val.strip():
+                entries.append({"name": name.strip(), "date": date_val.strip()})
+
+        if not entries:
+            return AgentResponse(
+                text="Couldn't parse any birthdays from the CSV. Expected columns: name, birthday (or date/dob)."
+            )
+
+        count = self.memory.store_birthdays_bulk(entries, keys.db_key)
+        return AgentResponse(text=f"Imported {count} birthdays from the CSV file.")
 
     async def _handle_general(self, message: str, keys: Any) -> AgentResponse:
         doc_result = await self._try_document_answer(message, keys)

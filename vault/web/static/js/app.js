@@ -43,10 +43,65 @@
             animateCounter($('#stat-creds'), data.credentials);
             animateCounter($('#stat-facts'), data.facts);
             animateCounter($('#stat-sessions'), data.active_sessions);
+
+            const bdayCard = $('#birthday-stat-card');
+            if (bdayCard) {
+                const total = data.total_birthdays || 0;
+                const upcoming = data.upcoming_birthdays || 0;
+                if (total > 0) {
+                    bdayCard.style.display = '';
+                    animateCounter($('#stat-birthdays'), total);
+                    const label = bdayCard.querySelector('.stat-label');
+                    if (label) label.textContent = upcoming > 0 ? `Birthdays (${upcoming} soon)` : 'Birthdays';
+                } else {
+                    bdayCard.style.display = 'none';
+                }
+            }
         } catch {}
     }
 
     loadStats();
+    loadBirthdays();
+
+    async function loadBirthdays() {
+        const widget = $('#birthday-widget');
+        const list = $('#birthday-list');
+        if (!widget || !list) return;
+        try {
+            const resp = await fetch('/api/birthdays');
+            if (!resp.ok) return;
+            const data = await resp.json();
+            const bdays = data.birthdays || [];
+            if (bdays.length === 0) { widget.style.display = 'none'; return; }
+
+            widget.style.display = '';
+            list.innerHTML = '';
+            bdays.forEach(b => {
+                const item = document.createElement('div');
+                item.className = 'birthday-item';
+                let badge = '';
+                const d = b.days_until;
+                if (d === null) badge = '<span class="bday-badge">?</span>';
+                else if (d === 0) badge = '<span class="bday-badge bday-today">TODAY</span>';
+                else if (d === 1) badge = '<span class="bday-badge bday-tomorrow">Tomorrow</span>';
+                else if (d <= 7) badge = `<span class="bday-badge bday-soon">In ${d} days</span>`;
+                else if (d <= 30) badge = `<span class="bday-badge bday-soon">${d}d</span>`;
+                else badge = `<span class="bday-badge">${d}d</span>`;
+
+                const isUpcoming = d !== null && d <= 7;
+                item.innerHTML = `
+                    <div class="bday-icon">${d === 0 ? '&#127874;' : '&#127873;'}</div>
+                    <div class="bday-info">
+                        <div class="bday-name">${b.name}</div>
+                        <div class="bday-date">${b.date}</div>
+                    </div>
+                    ${badge}
+                `;
+                if (isUpcoming) item.classList.add('bday-highlight');
+                list.appendChild(item);
+            });
+        } catch {}
+    }
 
     // ====== Ambient Particle Canvas ======
     const canvas = $('#ambient-canvas');
@@ -209,7 +264,7 @@
         if (viewName === 'credentials') loadCredentials();
         if (viewName === 'memory') loadMemory();
         if (viewName === 'database') loadDatabase();
-        if (viewName === 'chat') loadStats();
+        if (viewName === 'chat') { loadStats(); loadBirthdays(); }
     }
 
     // Restore view from current URL
@@ -327,6 +382,7 @@
             }
 
             loadStats();
+            loadBirthdays();
         } catch (err) {
             progressWrap.classList.add('hidden');
             if (err.message !== 'locked') {
@@ -420,6 +476,7 @@
                     showToast('Document uploaded!', 'success');
                     loadDocuments();
                     loadStats();
+                    loadBirthdays();
                 }
             } catch {
                 showToast('Upload failed', 'error');
