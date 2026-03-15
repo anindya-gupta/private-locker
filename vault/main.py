@@ -170,9 +170,12 @@ async def login_page(request: Request):
     if s is not None:
         return RedirectResponse("/app", status_code=302)
     has_username = session_store.username is not None
+    mode = request.query_params.get("mode", "")
+    password_only = (mode == "lock") and has_username
     return templates.TemplateResponse("unlock.html", {
         "request": request,
         "has_username": has_username,
+        "password_only": password_only,
     })
 
 

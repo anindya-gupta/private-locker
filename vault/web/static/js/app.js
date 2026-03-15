@@ -433,7 +433,7 @@
     if (lockBtn) lockBtn.addEventListener('click', async () => {
         await fetch('/api/lock', { method: 'POST' });
         showToast('Vault locked', 'success');
-        setTimeout(() => { window.location.href = '/login'; }, 400);
+        setTimeout(() => { window.location.href = '/login?mode=lock'; }, 400);
     });
 
     const logoutBtn = $('#logout-btn');

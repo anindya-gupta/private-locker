@@ -55,11 +55,16 @@
                     <span class="brand-name">Vault</span>
                 </div>
 
+                {% if password_only %}
+                <h1 class="auth-title">Vault <span class="gradient-text">Locked</span></h1>
+                <p class="subtitle">Enter your password to continue.</p>
+                {% else %}
                 <h1 class="auth-title">Welcome <span class="gradient-text">back</span></h1>
                 <p class="subtitle">Enter your credentials to unlock your vault.</p>
+                {% endif %}
 
                 <form id="unlock-form">
-                    {% if has_username %}
+                    {% if has_username and not password_only %}
                     <div class="form-group">
                         <label for="username">Username</label>
                         <input type="text" id="username" placeholder="Your username" autofocus required>
@@ -67,7 +72,7 @@
                     {% endif %}
                     <div class="form-group">
                         <label for="password">Master Password</label>
-                        <input type="password" id="password" placeholder="Enter your password" {% if not has_username %}autofocus{% endif %} required>
+                        <input type="password" id="password" placeholder="Enter your password" {% if password_only or not has_username %}autofocus{% endif %} required>
                     </div>
                     <div id="error" class="error-msg"></div>
                     <button type="submit" id="submit-btn">
