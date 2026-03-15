@@ -10,91 +10,132 @@
     <link rel="manifest" href="/static/manifest.json">
     <link rel="apple-touch-icon" href="/static/icons/vault-192.svg">
     <title>Vault — Unlock</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=3">
+    <link rel="stylesheet" href="/static/css/style.css?v=6">
 </head>
 <body class="auth-page">
 
-    <div class="auth-container">
-        <div class="auth-card" id="auth-card">
-            <div class="vault-icon locked" id="lock-icon">
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                    <path id="shackle" d="M7 11V7a5 5 0 0 1 10 0v4"/>
-                    <circle cx="12" cy="16" r="1"/>
+    <div class="auth-split">
+        <!-- Left: Orb animation fills this half -->
+        <div class="auth-visual">
+            <div class="vault-orb-scene" id="vault-orb">
+                <div class="orb-glow" id="orb-glow"></div>
+                <svg class="ring-svg" id="ring-svg" viewBox="0 0 400 400">
+                    <g transform="translate(200,200)">
+                        <circle class="ring ring-4" cx="0" cy="0" r="180"/>
+                        <circle class="ring ring-1" cx="0" cy="0" r="155"/>
+                        <circle class="ring ring-2" cx="0" cy="0" r="125"/>
+                        <circle class="ring ring-3" cx="0" cy="0" r="95"/>
+                        <circle class="ring ring-core" cx="0" cy="0" r="55"/>
+                    </g>
                 </svg>
-            </div>
-            <h1>Vault Locked</h1>
-            <p class="subtitle">Enter your master password to access your data.</p>
-
-            <form id="unlock-form">
-                <div class="form-group">
-                    <label for="password">Master Password</label>
-                    <input type="password" id="password" placeholder="Enter your password" autofocus required>
+                <div class="center-icon" id="center-icon">
+                    <svg width="52" height="52" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.5" color="var(--accent)">
+                        <rect x="8" y="22" width="32" height="22" rx="4"/>
+                        <path id="shackle-path" d="M14 22V16a10 10 0 0 1 20 0v6" stroke-linecap="round"/>
+                        <circle cx="24" cy="33" r="3" fill="currentColor"/>
+                        <line x1="24" y1="36" x2="24" y2="40" stroke-linecap="round"/>
+                    </svg>
                 </div>
-                <div id="error" class="error-msg"></div>
-                <button type="submit" id="submit-btn">Unlock</button>
-            </form>
+            </div>
+            <div class="visual-tagline">
+                <span class="tagline-icon">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                </span>
+                End-to-end encrypted &bull; Zero-knowledge
+            </div>
+        </div>
+
+        <!-- Right: Form panel -->
+        <div class="auth-panel">
+            <div class="auth-panel-inner" id="auth-card">
+                <div class="auth-brand">
+                    <div class="brand-icon">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    </div>
+                    <span class="brand-name">Vault</span>
+                </div>
+
+                <h1 class="auth-title">Welcome <span class="gradient-text">back</span></h1>
+                <p class="subtitle">Enter your credentials to unlock your vault.</p>
+
+                <form id="unlock-form">
+                    {% if has_username %}
+                    <div class="form-group">
+                        <label for="username">Username</label>
+                        <input type="text" id="username" placeholder="Your username" autofocus required>
+                    </div>
+                    {% endif %}
+                    <div class="form-group">
+                        <label for="password">Master Password</label>
+                        <input type="password" id="password" placeholder="Enter your password" {% if not has_username %}autofocus{% endif %} required>
+                    </div>
+                    <div id="error" class="error-msg"></div>
+                    <button type="submit" id="submit-btn">
+                        <span class="btn-text">Unlock Vault</span>
+                        <svg class="btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                            <path d="M5 12h14M12 5l7 7-7 7"/>
+                        </svg>
+                    </button>
+                </form>
+
+                <div class="auth-footer-text">
+                    Your data never leaves your machine.
+                </div>
+            </div>
         </div>
     </div>
 
-    <script src="/static/js/auth-effects.js?v=3"></script>
+    <script src="/static/js/auth-effects.js?v=6"></script>
     <script>
         const form = document.getElementById('unlock-form');
         const errorEl = document.getElementById('error');
         const btn = document.getElementById('submit-btn');
+        const btnText = btn.querySelector('.btn-text');
         const pwField = document.getElementById('password');
+        const userField = document.getElementById('username');
 
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
             errorEl.textContent = '';
             const pw = pwField.value;
+            const username = userField ? userField.value.trim() : '';
             if (!pw) return;
 
             btn.disabled = true;
-            btn.textContent = 'Unlocking...';
+            btnText.textContent = 'Unlocking...';
 
             try {
                 const resp = await fetch('/api/unlock', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({password: pw}),
+                    body: JSON.stringify({password: pw, username}),
                 });
                 if (resp.ok) {
                     if (window.playUnlockAnimation) {
-                        window.playUnlockAnimation(() => { window.location.href = '/'; });
+                        window.playUnlockAnimation(() => { window.location.href = '/app'; });
                     } else {
-                        window.location.href = '/';
+                        window.location.href = '/app';
                     }
                 } else {
-                    errorEl.textContent = 'Incorrect password. Try again.';
+                    errorEl.textContent = 'Incorrect credentials. Try again.';
                     pwField.value = '';
                     pwField.focus();
-                    shakeElement(pwField);
-                    shakeElement(document.getElementById('lock-icon'));
+                    shakeElement(document.getElementById('auth-card'));
+                    if (window.playRejectAnimation) window.playRejectAnimation();
                 }
             } catch {
                 errorEl.textContent = 'Connection error.';
             } finally {
                 btn.disabled = false;
-                btn.textContent = 'Unlock';
+                btnText.textContent = 'Unlock Vault';
             }
         });
 
         function shakeElement(el) {
             if (!el) return;
-            el.style.animation = 'none';
-            requestAnimationFrame(() => { el.style.animation = 'shake 0.4s ease'; });
+            el.classList.add('shake-anim');
+            el.addEventListener('animationend', () => el.classList.remove('shake-anim'), { once: true });
         }
     </script>
-    <style>
-        @keyframes authExit { to { opacity: 0; transform: translateY(-30px) scale(0.9); } }
-        @keyframes shake {
-            0%, 100% { transform: translateX(0); }
-            20% { transform: translateX(-8px); }
-            40% { transform: translateX(8px); }
-            60% { transform: translateX(-5px); }
-            80% { transform: translateX(5px); }
-        }
-    </style>
 </body>
 </html>

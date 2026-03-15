@@ -6,6 +6,48 @@
 
     let selectedFile = null;
 
+    // ====== Toast System ======
+    function showToast(msg, type = 'success') {
+        const existing = $('.toast');
+        if (existing) existing.remove();
+        const el = document.createElement('div');
+        el.className = `toast ${type}`;
+        el.textContent = msg;
+        document.body.appendChild(el);
+        setTimeout(() => { if (el.parentNode) el.remove(); }, 3200);
+    }
+
+    // ====== Animated Counter ======
+    function animateCounter(el, target) {
+        const duration = 600;
+        const start = parseInt(el.textContent) || 0;
+        if (start === target) return;
+        const startTime = performance.now();
+        function tick(now) {
+            const elapsed = now - startTime;
+            const progress = Math.min(elapsed / duration, 1);
+            const eased = 1 - Math.pow(1 - progress, 3);
+            el.textContent = Math.round(start + (target - start) * eased);
+            if (progress < 1) requestAnimationFrame(tick);
+        }
+        requestAnimationFrame(tick);
+    }
+
+    // ====== Dashboard Stats ======
+    async function loadStats() {
+        try {
+            const resp = await fetch('/api/stats');
+            if (resp.status === 401) { redirectToLogin(); return; }
+            const data = await resp.json();
+            animateCounter($('#stat-docs'), data.documents);
+            animateCounter($('#stat-creds'), data.credentials);
+            animateCounter($('#stat-facts'), data.facts);
+            animateCounter($('#stat-sessions'), data.active_sessions);
+        } catch {}
+    }
+
+    loadStats();
+
     // ====== Ambient Particle Canvas ======
     const canvas = $('#ambient-canvas');
     if (canvas) {
@@ -21,7 +63,6 @@
 
         class Particle {
             constructor() { this.reset(); }
-
             reset() {
                 this.x = Math.random() * canvas.width;
                 this.y = Math.random() * canvas.height;
@@ -35,15 +76,12 @@
                 this.pulseSpeed = Math.random() * 0.008 + 0.003;
                 this.pulsePhase = Math.random() * Math.PI * 2;
             }
-
             update(time) {
                 this.x += this.speedX;
                 this.y += this.speedY;
-
                 const dx = mouse.x - this.x;
                 const dy = mouse.y - this.y;
                 const dist = Math.sqrt(dx * dx + dy * dy);
-
                 if (dist < 180) {
                     const force = (180 - dist) / 180;
                     this.x += dx * force * 0.008;
@@ -54,15 +92,11 @@
                     this.opacity += (this.baseOpacity - this.opacity) * 0.04;
                     this.size += (this.baseSize - this.size) * 0.04;
                 }
-
                 this.opacity *= (Math.sin(time * this.pulseSpeed + this.pulsePhase) * 0.12 + 0.88);
-
-                if (this.x < -10 || this.x > canvas.width + 10 ||
-                    this.y < -10 || this.y > canvas.height + 10) {
+                if (this.x < -10 || this.x > canvas.width + 10 || this.y < -10 || this.y > canvas.height + 10) {
                     this.reset();
                 }
             }
-
             draw() {
                 ctx.beginPath();
                 ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
@@ -99,7 +133,6 @@
                         ctx.stroke();
                     }
                 }
-
                 if (mouse.x > 0) {
                     const dx = mouse.x - particles[i].x;
                     const dy = mouse.y - particles[i].y;
@@ -126,18 +159,35 @@
 
         window.addEventListener('resize', () => { resizeCanvas(); initParticles(); });
         document.addEventListener('mousemove', (e) => { mouse.x = e.clientX; mouse.y = e.clientY; });
-
         resizeCanvas();
         initParticles();
         raf = requestAnimationFrame(animate);
     }
 
-    // ====== Navigation ======
+    // ====== Navigation with pushState ======
     const views = $$('.view');
     const navBtns = $$('.nav-btn');
     const tabBtns = $$('.tab-btn');
+    const viewOrder = ['chat', 'documents', 'credentials', 'memory', 'database'];
 
-    function switchView(viewName) {
+    const pathToView = {
+        '/app': 'chat',
+        '/app/chat': 'chat',
+        '/app/docs': 'documents',
+        '/app/credentials': 'credentials',
+        '/app/memory': 'memory',
+        '/app/database': 'database',
+    };
+
+    const viewToPath = {
+        'chat': '/app/chat',
+        'documents': '/app/docs',
+        'credentials': '/app/credentials',
+        'memory': '/app/memory',
+        'database': '/app/database',
+    };
+
+    function switchView(viewName, pushState = true) {
         const currentView = $('.view.active');
         const nextView = $(`#view-${viewName}`);
         if (currentView === nextView) return;
@@ -145,23 +195,36 @@
         navBtns.forEach(b => b.classList.toggle('active', b.dataset.view === viewName));
         tabBtns.forEach(b => b.classList.toggle('active', b.dataset.view === viewName));
 
-        if (currentView) {
-            currentView.classList.remove('active');
+        if (currentView) currentView.classList.remove('active');
+        if (nextView) nextView.classList.add('active');
+
+        if (pushState && viewToPath[viewName]) {
+            history.pushState({ view: viewName }, '', viewToPath[viewName]);
         }
-        if (nextView) {
-            nextView.classList.add('active');
-        }
+
+        const statsEl = $('#dashboard-stats');
+        if (statsEl) statsEl.style.display = viewName === 'chat' ? '' : 'none';
 
         if (viewName === 'documents') loadDocuments();
         if (viewName === 'credentials') loadCredentials();
         if (viewName === 'memory') loadMemory();
+        if (viewName === 'database') loadDatabase();
+        if (viewName === 'chat') loadStats();
     }
+
+    // Restore view from current URL
+    const initialView = pathToView[window.location.pathname] || 'chat';
+    if (initialView !== 'chat') switchView(initialView, false);
+
+    window.addEventListener('popstate', (e) => {
+        const view = e.state?.view || pathToView[window.location.pathname] || 'chat';
+        switchView(view, false);
+    });
 
     navBtns.forEach(btn => btn.addEventListener('click', () => switchView(btn.dataset.view)));
     tabBtns.forEach(btn => btn.addEventListener('click', () => switchView(btn.dataset.view)));
 
     // ====== Swipe Navigation (mobile) ======
-    const viewOrder = ['chat', 'documents', 'credentials', 'memory'];
     let touchStartX = 0;
     let touchStartY = 0;
 
@@ -174,17 +237,20 @@
         const dx = e.changedTouches[0].clientX - touchStartX;
         const dy = e.changedTouches[0].clientY - touchStartY;
         if (Math.abs(dx) < 60 || Math.abs(dy) > Math.abs(dx) * 0.7) return;
-
         const activeBtn = $('.tab-btn.active') || $('.nav-btn.active');
         if (!activeBtn) return;
         const currentIdx = viewOrder.indexOf(activeBtn.dataset.view);
         if (currentIdx === -1) return;
-
         const nextIdx = dx < 0 ? currentIdx + 1 : currentIdx - 1;
         if (nextIdx >= 0 && nextIdx < viewOrder.length) {
             switchView(viewOrder[nextIdx]);
         }
     }, { passive: true });
+
+    // ====== Auth Redirects ======
+    function redirectToLogin() {
+        window.location.href = '/login';
+    }
 
     // ====== Chat ======
     const chatForm = $('#chat-form');
@@ -230,8 +296,7 @@
                 xhr.addEventListener('load', () => {
                     if (hasFile) progressBar.style.width = '100%';
                     if (xhr.status === 401) {
-                        showLockOverlay();
-                        loadingEl.remove();
+                        redirectToLogin();
                         reject(new Error('locked'));
                         return;
                     }
@@ -260,6 +325,8 @@
                 dlBtn.style.cssText = 'display:inline-block;margin-top:0.6rem;color:var(--accent);text-decoration:none;font-weight:600;';
                 contentEl.appendChild(dlBtn);
             }
+
+            loadStats();
         } catch (err) {
             progressWrap.classList.add('hidden');
             if (err.message !== 'locked') {
@@ -326,14 +393,12 @@
                 dropZone.classList.remove('hidden');
             });
         });
-
         ['dragleave', 'drop'].forEach(evt => {
             dropZone.addEventListener(evt, (e) => {
                 e.preventDefault();
                 dropZone.classList.add('hidden');
             });
         });
-
         dropZone.addEventListener('drop', (e) => {
             if (e.dataTransfer.files.length) selectFile(e.dataTransfer.files[0]);
         });
@@ -350,9 +415,11 @@
             formData.append('file', file);
             try {
                 const resp = await fetch('/api/chat', { method: 'POST', body: formData });
+                if (resp.status === 401) { redirectToLogin(); return; }
                 if (resp.ok) {
                     showToast('Document uploaded!', 'success');
                     loadDocuments();
+                    loadStats();
                 }
             } catch {
                 showToast('Upload failed', 'error');
@@ -361,11 +428,19 @@
         });
     }
 
-    // ====== Lock ======
+    // ====== Lock & Logout ======
     const lockBtn = $('#lock-btn');
     if (lockBtn) lockBtn.addEventListener('click', async () => {
         await fetch('/api/lock', { method: 'POST' });
-        showLockOverlay();
+        showToast('Vault locked', 'success');
+        setTimeout(() => { window.location.href = '/login'; }, 400);
+    });
+
+    const logoutBtn = $('#logout-btn');
+    if (logoutBtn) logoutBtn.addEventListener('click', async () => {
+        await fetch('/api/logout', { method: 'POST' });
+        showToast('Logged out', 'success');
+        setTimeout(() => { window.location.href = '/login'; }, 400);
     });
 
     function showLockOverlay() {
@@ -389,6 +464,9 @@
             $('#lock-overlay').classList.add('hidden');
             $('#relock-password').value = '';
             const errEl = $('#relock-error'); if (errEl) errEl.textContent = '';
+            showToast('Unlocked!', 'success');
+        } else if (resp.status === 401) {
+            redirectToLogin();
         } else {
             const errField = $('#relock-password');
             const errEl = $('#relock-error'); if (errEl) errEl.textContent = 'Incorrect password.';
@@ -404,7 +482,6 @@
         requestAnimationFrame(() => { el.style.animation = 'shake 0.4s ease'; });
     }
 
-    // inject shake keyframes
     const dynStyles = document.createElement('style');
     dynStyles.textContent = `
         @keyframes shake {
@@ -480,26 +557,22 @@
         }
     });
 
-    // ====== Toast ======
-    function showToast(msg, type = 'success') {
-        const existing = $('.toast');
-        if (existing) existing.remove();
-        const el = document.createElement('div');
-        el.className = `toast ${type}`;
-        el.textContent = msg;
-        document.body.appendChild(el);
-        setTimeout(() => el.remove(), 3200);
-    }
+    // ====== Data Loading with Skeleton States ======
+    let _allDocs = [];
+    let _allCreds = [];
+    let _allFacts = [];
 
-    // ====== Data Loading ======
     async function loadDocuments() {
         const container = $('#documents-list');
         if (!container) return;
+        container.innerHTML = '<div class="skeleton-grid"><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div></div>';
         try {
             const resp = await fetch('/api/chat', { method: 'POST', body: new URLSearchParams({ message: 'list documents' }) });
+            if (resp.status === 401) { redirectToLogin(); return; }
             const data = await resp.json();
 
             if (data.text.includes('No documents') || data.text.includes('empty')) {
+                _allDocs = [];
                 container.innerHTML = '<p class="empty-state">No documents stored yet.<br><strong>Upload one to get started.</strong></p>';
                 return;
             }
@@ -507,79 +580,216 @@
             const lines = data.text.split('\n').filter(l => l.trim().startsWith('-'));
             if (!lines.length) { container.innerHTML = `<p class="empty-state">${data.text}</p>`; return; }
 
-            container.innerHTML = '';
-            lines.forEach((line, i) => {
+            _allDocs = lines.map(line => {
                 const match = line.match(/\[(.+?)\]\s*(.+)/);
-                if (match) {
-                    const card = document.createElement('div');
-                    card.className = 'item-card';
-                    card.style.animationDelay = `${i * 0.06}s`;
-                    card.innerHTML = `<div class="category">${match[1]}</div><div class="name">${match[2]}</div>`;
-                    addTiltEffect(card);
-                    container.appendChild(card);
-                }
-            });
+                return match ? { category: match[1], name: match[2], raw: line } : null;
+            }).filter(Boolean);
+
+            renderDocuments(_allDocs);
         } catch {
             container.innerHTML = '<p class="empty-state">Failed to load documents.</p>';
         }
     }
 
+    function renderDocuments(docs) {
+        const container = $('#documents-list');
+        if (!container) return;
+        if (!docs.length) {
+            container.innerHTML = '<p class="empty-state">No matching documents.</p>';
+            return;
+        }
+        container.innerHTML = '';
+        docs.forEach((doc, i) => {
+            const card = document.createElement('div');
+            card.className = 'item-card';
+            card.style.animationDelay = `${i * 0.06}s`;
+            card.innerHTML = `<div class="category">${doc.category}</div><div class="name">${doc.name}</div>`;
+            addTiltEffect(card);
+            container.appendChild(card);
+        });
+    }
+
     async function loadCredentials() {
         const container = $('#credentials-list');
         if (!container) return;
+        container.innerHTML = '<div class="skeleton-list"><div class="skeleton-item"></div><div class="skeleton-item"></div><div class="skeleton-item"></div></div>';
         try {
             const resp = await fetch('/api/chat', { method: 'POST', body: new URLSearchParams({ message: 'list credentials' }) });
+            if (resp.status === 401) { redirectToLogin(); return; }
             const data = await resp.json();
 
             if (data.text.includes('No credentials')) {
+                _allCreds = [];
                 container.innerHTML = '<p class="empty-state">No credentials stored yet.<br><strong>Tell Vault a login to save it.</strong></p>';
                 return;
             }
 
             const lines = data.text.split('\n').filter(l => l.trim().startsWith('-'));
-            container.innerHTML = '';
-            lines.forEach((line, i) => {
+            _allCreds = lines.map(line => {
                 const parts = line.replace(/^\s*-\s*/, '').split(':');
-                const item = document.createElement('div');
-                item.className = 'list-item';
-                item.style.animationDelay = `${i * 0.06}s`;
-                item.innerHTML = `<div><div class="service">${parts[0] || ''}</div><div class="username">${(parts[1] || '').trim()}</div></div>`;
-                container.appendChild(item);
+                return { service: parts[0] || '', username: (parts[1] || '').trim(), raw: line };
             });
+
+            renderCredentials(_allCreds);
         } catch {
             container.innerHTML = '<p class="empty-state">Failed to load credentials.</p>';
         }
     }
 
+    function renderCredentials(creds) {
+        const container = $('#credentials-list');
+        if (!container) return;
+        if (!creds.length) {
+            container.innerHTML = '<p class="empty-state">No matching credentials.</p>';
+            return;
+        }
+        container.innerHTML = '';
+        creds.forEach((cred, i) => {
+            const item = document.createElement('div');
+            item.className = 'list-item collapsible';
+            item.style.animationDelay = `${i * 0.06}s`;
+            item.innerHTML = `<div><div class="service">${cred.service}</div><div class="username">${cred.username}</div></div><svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>`;
+            item.addEventListener('click', () => item.classList.toggle('expanded'));
+            container.appendChild(item);
+        });
+    }
+
     async function loadMemory() {
         const container = $('#memory-list');
         if (!container) return;
+        container.innerHTML = '<div class="skeleton-list"><div class="skeleton-item"></div><div class="skeleton-item"></div><div class="skeleton-item"></div></div>';
         try {
             const resp = await fetch('/api/chat', { method: 'POST', body: new URLSearchParams({ message: 'what do you remember' }) });
+            if (resp.status === 401) { redirectToLogin(); return; }
             const data = await resp.json();
 
             if (data.text.includes('No facts')) {
+                _allFacts = [];
                 container.innerHTML = '<p class="empty-state">No facts stored yet.<br><strong>Tell me something about yourself!</strong></p>';
                 return;
             }
 
-            container.innerHTML = '';
-            data.text.split('\n').forEach((line, i) => {
-                if (!line.trim()) return;
-                const item = document.createElement('div');
-                item.className = 'list-item';
-                item.style.animationDelay = `${i * 0.06}s`;
-                if (line.startsWith('[')) {
-                    item.innerHTML = `<div style="font-weight:600;color:var(--accent)">${line}</div>`;
-                } else {
-                    item.innerHTML = `<div>${line.trim()}</div>`;
-                }
-                container.appendChild(item);
-            });
+            _allFacts = data.text.split('\n').filter(l => l.trim()).map(line => ({ text: line.trim(), raw: line }));
+            renderFacts(_allFacts);
         } catch {
             container.innerHTML = '<p class="empty-state">Failed to load memory.</p>';
         }
     }
+
+    function renderFacts(facts) {
+        const container = $('#memory-list');
+        if (!container) return;
+        if (!facts.length) {
+            container.innerHTML = '<p class="empty-state">No matching facts.</p>';
+            return;
+        }
+        container.innerHTML = '';
+        facts.forEach((fact, i) => {
+            const item = document.createElement('div');
+            item.className = 'list-item';
+            item.style.animationDelay = `${i * 0.06}s`;
+            if (fact.text.startsWith('[')) {
+                item.innerHTML = `<div style="font-weight:600;color:var(--accent)">${fact.text}</div>`;
+            } else {
+                item.innerHTML = `<div>${fact.text}</div>`;
+            }
+            container.appendChild(item);
+        });
+    }
+
+    // ====== Search-as-you-type ======
+    const docSearch = $('#doc-search');
+    if (docSearch) docSearch.addEventListener('input', () => {
+        const q = docSearch.value.toLowerCase();
+        renderDocuments(q ? _allDocs.filter(d => d.name.toLowerCase().includes(q) || d.category.toLowerCase().includes(q)) : _allDocs);
+    });
+
+    const credSearch = $('#cred-search');
+    if (credSearch) credSearch.addEventListener('input', () => {
+        const q = credSearch.value.toLowerCase();
+        renderCredentials(q ? _allCreds.filter(c => c.service.toLowerCase().includes(q) || c.username.toLowerCase().includes(q)) : _allCreds);
+    });
+
+    const factSearch = $('#fact-search');
+    if (factSearch) factSearch.addEventListener('input', () => {
+        const q = factSearch.value.toLowerCase();
+        renderFacts(q ? _allFacts.filter(f => f.text.toLowerCase().includes(q)) : _allFacts);
+    });
+
+    // ====== Database Viewer ======
+    const dbTabs = $$('.db-tab');
+
+    async function loadDatabase() {
+        const summaryEl = $('#db-summary');
+        const tableEl = $('#db-table-container');
+        if (!summaryEl || !tableEl) return;
+
+        try {
+            const resp = await fetch('/api/db-viewer');
+            if (resp.status === 401) { redirectToLogin(); return; }
+            const data = await resp.json();
+
+            summaryEl.innerHTML = '';
+            Object.entries(data.tables).forEach(([name, info]) => {
+                const chip = document.createElement('div');
+                chip.className = 'db-chip';
+                chip.innerHTML = `<strong>${name}</strong> &mdash; ${info.count} rows, ${info.columns.length} cols`;
+                summaryEl.appendChild(chip);
+            });
+
+            const activeTab = $('.db-tab.active');
+            if (activeTab) loadDbTable(activeTab.dataset.table);
+        } catch {
+            summaryEl.innerHTML = '<p class="empty-state">Failed to load database info.</p>';
+        }
+    }
+
+    async function loadDbTable(table) {
+        const container = $('#db-table-container');
+        if (!container) return;
+        container.innerHTML = '<div class="skeleton-list"><div class="skeleton-item"></div><div class="skeleton-item"></div></div>';
+
+        try {
+            const resp = await fetch(`/api/db-viewer/${table}`);
+            if (resp.status === 401) { redirectToLogin(); return; }
+            const data = await resp.json();
+
+            if (!data.rows || !data.rows.length) {
+                container.innerHTML = '<p class="empty-state">No data in this table.</p>';
+                return;
+            }
+
+            const cols = Object.keys(data.rows[0]);
+            let html = '<div class="db-table-scroll"><table class="db-table"><thead><tr>';
+            cols.forEach(c => { html += `<th>${c}</th>`; });
+            html += '</tr></thead><tbody>';
+            data.rows.forEach(row => {
+                html += '<tr>';
+                cols.forEach(c => {
+                    let val = row[c];
+                    if (val === null || val === undefined) val = '<span class="null-val">null</span>';
+                    else if (typeof val === 'object') val = JSON.stringify(val);
+                    else if (typeof val === 'number' && (c.includes('_at') || c === 'created_at' || c === 'updated_at')) {
+                        val = new Date(val * 1000).toLocaleString();
+                    }
+                    else val = String(val);
+                    if (val.length > 80) val = val.substring(0, 80) + '...';
+                    html += `<td>${val}</td>`;
+                });
+                html += '</tr>';
+            });
+            html += '</tbody></table></div>';
+            container.innerHTML = html;
+        } catch {
+            container.innerHTML = '<p class="empty-state">Failed to load table data.</p>';
+        }
+    }
+
+    dbTabs.forEach(tab => tab.addEventListener('click', () => {
+        dbTabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        loadDbTable(tab.dataset.table);
+    }));
 
     // ====== 3D Tilt for Cards ======
     function addTiltEffect(card) {
@@ -635,7 +845,7 @@
         try {
             const resp = await fetch('/api/status');
             const data = await resp.json();
-            if (data.locked) showLockOverlay();
+            if (data.locked) redirectToLogin();
         } catch {}
     }, 30000);
 })();
