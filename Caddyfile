@@ -1,4 +1,4 @@
-:80 {
+myprivatelockr.com {
     reverse_proxy vault:8080
     encode gzip
     header {
