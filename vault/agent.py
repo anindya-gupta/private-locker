@@ -517,10 +517,34 @@ class VaultAgent:
             return AgentResponse(text=f"No documents matching '{doc_name or message}' found.")
 
         lower = message.lower()
-        wants_all = any(w in lower for w in ["all", "every", "show me all", "share all"])
         wants_latest = any(w in lower for w in ["last", "latest", "most recent", "newest"])
+        wants_oldest = any(w in lower for w in ["first", "oldest", "earliest"])
 
-        if wants_all and len(docs) > 1:
+        if wants_latest and len(docs) > 1:
+            docs = self._sort_documents_by_date(docs, newest_first=True)
+            doc = docs[0]
+            date_label = self._get_doc_date_label(doc)
+            if doc.get("file_ref"):
+                try:
+                    file_data, original_name = self.file_vault.retrieve(doc["file_ref"], keys.file_key)
+                    label = f"Here's your latest document: {doc['name']}"
+                    if date_label:
+                        label += f" ({date_label})"
+                    return AgentResponse(text=label, file_data=file_data, file_name=original_name)
+                except FileNotFoundError:
+                    return AgentResponse(text=f"Document '{doc['name']}' record exists but the file is missing.")
+
+        if wants_oldest and len(docs) > 1:
+            docs = self._sort_documents_by_date(docs, newest_first=False)
+            doc = docs[0]
+            if doc.get("file_ref"):
+                try:
+                    file_data, original_name = self.file_vault.retrieve(doc["file_ref"], keys.file_key)
+                    return AgentResponse(text=f"Here's your earliest document: {doc['name']}", file_data=file_data, file_name=original_name)
+                except FileNotFoundError:
+                    return AgentResponse(text=f"Document '{doc['name']}' record exists but the file is missing.")
+
+        if len(docs) > 1:
             lines = [f"Found {len(docs)} matching documents:"]
             for i, doc in enumerate(docs, 1):
                 date_label = self._get_doc_date_label(doc)
@@ -528,11 +552,8 @@ class VaultAgent:
                 if date_label:
                     line += f" ({date_label})"
                 lines.append(line)
-            lines.append("\nAsk me to download a specific one by name.")
+            lines.append("\nSay \"download <name>\" to get a specific one, or \"latest\" to get the most recent.")
             return AgentResponse(text="\n".join(lines))
-
-        if wants_latest and len(docs) > 1:
-            docs = self._sort_documents_by_date(docs, newest_first=True)
 
         doc = docs[0]
         if doc.get("file_ref"):
