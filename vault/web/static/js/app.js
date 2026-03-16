@@ -614,6 +614,68 @@
         }
     });
 
+    // ====== Delete Confirmation ======
+    let _pendingDelete = null;
+
+    function confirmDelete(type, id, name) {
+        _pendingDelete = { type, id };
+        const modal = $('#delete-modal');
+        const typeEl = $('#delete-item-type');
+        const nameEl = $('#delete-item-name');
+        if (!modal) return;
+        typeEl.textContent = type;
+        nameEl.textContent = name;
+        modal.classList.remove('hidden');
+    }
+
+    const deleteConfirmBtn = $('#delete-confirm');
+    if (deleteConfirmBtn) deleteConfirmBtn.addEventListener('click', async () => {
+        if (!_pendingDelete) return;
+        const { type, id } = _pendingDelete;
+        const btn = deleteConfirmBtn;
+        btn.disabled = true;
+        btn.textContent = 'Deleting...';
+
+        try {
+            const endpoint = type === 'document' ? `/api/documents/${id}`
+                : type === 'credential' ? `/api/credentials/${id}`
+                : `/api/facts/${id}`;
+            const resp = await fetch(endpoint, { method: 'DELETE' });
+            if (resp.status === 401) { redirectToLogin(); return; }
+            if (resp.ok) {
+                showToast(`${type.charAt(0).toUpperCase() + type.slice(1)} deleted`, 'success');
+                if (type === 'document') loadDocuments();
+                else if (type === 'credential') loadCredentials();
+                else loadMemory();
+                loadStats();
+            } else {
+                const data = await resp.json();
+                showToast(data.detail || 'Delete failed', 'error');
+            }
+        } catch {
+            showToast('Delete failed', 'error');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Delete';
+            _pendingDelete = null;
+            $('#delete-modal').classList.add('hidden');
+        }
+    });
+
+    const deleteCancelBtn = $('#delete-cancel');
+    if (deleteCancelBtn) deleteCancelBtn.addEventListener('click', () => {
+        _pendingDelete = null;
+        $('#delete-modal').classList.add('hidden');
+    });
+
+    const deleteModal = $('#delete-modal');
+    if (deleteModal) deleteModal.addEventListener('click', (e) => {
+        if (e.target === deleteModal) {
+            _pendingDelete = null;
+            deleteModal.classList.add('hidden');
+        }
+    });
+
     // ====== Data Loading with Skeleton States ======
     let _allDocs = [];
     let _allCreds = [];
@@ -624,24 +686,15 @@
         if (!container) return;
         container.innerHTML = '<div class="skeleton-grid"><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div></div>';
         try {
-            const resp = await fetch('/api/chat', { method: 'POST', body: new URLSearchParams({ message: 'list documents' }) });
+            const resp = await fetch('/api/documents');
             if (resp.status === 401) { redirectToLogin(); return; }
             const data = await resp.json();
 
-            if (data.text.includes('No documents') || data.text.includes('empty')) {
-                _allDocs = [];
+            _allDocs = data.documents || [];
+            if (!_allDocs.length) {
                 container.innerHTML = '<p class="empty-state">No documents stored yet.<br><strong>Upload one to get started.</strong></p>';
                 return;
             }
-
-            const lines = data.text.split('\n').filter(l => l.trim().startsWith('-'));
-            if (!lines.length) { container.innerHTML = `<p class="empty-state">${data.text}</p>`; return; }
-
-            _allDocs = lines.map(line => {
-                const match = line.match(/\[(.+?)\]\s*(.+)/);
-                return match ? { category: match[1], name: match[2], raw: line } : null;
-            }).filter(Boolean);
-
             renderDocuments(_allDocs);
         } catch {
             container.innerHTML = '<p class="empty-state">Failed to load documents.</p>';
@@ -660,7 +713,21 @@
             const card = document.createElement('div');
             card.className = 'item-card';
             card.style.animationDelay = `${i * 0.06}s`;
-            card.innerHTML = `<div class="category">${doc.category}</div><div class="name">${doc.name}</div>`;
+
+            const subTag = (doc.tags || []).find(t => t.startsWith('sub:'));
+            const subLabel = subTag ? `<span class="sub-tag">${subTag.slice(4)}</span>` : '';
+
+            card.innerHTML = `
+                <button class="delete-btn" title="Delete document" data-type="document" data-id="${doc.id}" data-name="${doc.name}">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                </button>
+                <div class="category">${doc.category} ${subLabel}</div>
+                <div class="name">${doc.name}</div>
+            `;
+            card.querySelector('.delete-btn').addEventListener('click', (e) => {
+                e.stopPropagation();
+                confirmDelete('document', doc.id, doc.name);
+            });
             addTiltEffect(card);
             container.appendChild(card);
         });
@@ -671,22 +738,15 @@
         if (!container) return;
         container.innerHTML = '<div class="skeleton-list"><div class="skeleton-item"></div><div class="skeleton-item"></div><div class="skeleton-item"></div></div>';
         try {
-            const resp = await fetch('/api/chat', { method: 'POST', body: new URLSearchParams({ message: 'list credentials' }) });
+            const resp = await fetch('/api/credentials');
             if (resp.status === 401) { redirectToLogin(); return; }
             const data = await resp.json();
 
-            if (data.text.includes('No credentials')) {
-                _allCreds = [];
+            _allCreds = data.credentials || [];
+            if (!_allCreds.length) {
                 container.innerHTML = '<p class="empty-state">No credentials stored yet.<br><strong>Tell Vault a login to save it.</strong></p>';
                 return;
             }
-
-            const lines = data.text.split('\n').filter(l => l.trim().startsWith('-'));
-            _allCreds = lines.map(line => {
-                const parts = line.replace(/^\s*-\s*/, '').split(':');
-                return { service: parts[0] || '', username: (parts[1] || '').trim(), raw: line };
-            });
-
             renderCredentials(_allCreds);
         } catch {
             container.innerHTML = '<p class="empty-state">Failed to load credentials.</p>';
@@ -705,8 +765,23 @@
             const item = document.createElement('div');
             item.className = 'list-item collapsible';
             item.style.animationDelay = `${i * 0.06}s`;
-            item.innerHTML = `<div><div class="service">${cred.service}</div><div class="username">${cred.username}</div></div><svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>`;
-            item.addEventListener('click', () => item.classList.toggle('expanded'));
+            item.innerHTML = `
+                <div class="list-item-content">
+                    <div><div class="service">${cred.service}</div><div class="username">${cred.username || ''}</div></div>
+                    <div class="list-item-actions">
+                        <button class="delete-btn" title="Delete credential">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                        </button>
+                        <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                    </div>
+                </div>`;
+            item.querySelector('.delete-btn').addEventListener('click', (e) => {
+                e.stopPropagation();
+                confirmDelete('credential', cred.id, cred.service);
+            });
+            item.addEventListener('click', (e) => {
+                if (!e.target.closest('.delete-btn')) item.classList.toggle('expanded');
+            });
             container.appendChild(item);
         });
     }
@@ -716,17 +791,15 @@
         if (!container) return;
         container.innerHTML = '<div class="skeleton-list"><div class="skeleton-item"></div><div class="skeleton-item"></div><div class="skeleton-item"></div></div>';
         try {
-            const resp = await fetch('/api/chat', { method: 'POST', body: new URLSearchParams({ message: 'what do you remember' }) });
+            const resp = await fetch('/api/facts');
             if (resp.status === 401) { redirectToLogin(); return; }
             const data = await resp.json();
 
-            if (data.text.includes('No facts')) {
-                _allFacts = [];
+            _allFacts = data.facts || [];
+            if (!_allFacts.length) {
                 container.innerHTML = '<p class="empty-state">No facts stored yet.<br><strong>Tell me something about yourself!</strong></p>';
                 return;
             }
-
-            _allFacts = data.text.split('\n').filter(l => l.trim()).map(line => ({ text: line.trim(), raw: line }));
             renderFacts(_allFacts);
         } catch {
             container.innerHTML = '<p class="empty-state">Failed to load memory.</p>';
@@ -741,16 +814,37 @@
             return;
         }
         container.innerHTML = '';
-        facts.forEach((fact, i) => {
-            const item = document.createElement('div');
-            item.className = 'list-item';
-            item.style.animationDelay = `${i * 0.06}s`;
-            if (fact.text.startsWith('[')) {
-                item.innerHTML = `<div style="font-weight:600;color:var(--accent)">${fact.text}</div>`;
-            } else {
-                item.innerHTML = `<div>${fact.text}</div>`;
-            }
-            container.appendChild(item);
+
+        const grouped = {};
+        facts.forEach(f => {
+            const cat = f.category || 'general';
+            if (!grouped[cat]) grouped[cat] = [];
+            grouped[cat].push(f);
+        });
+
+        Object.entries(grouped).forEach(([category, items]) => {
+            const header = document.createElement('div');
+            header.className = 'fact-category-header';
+            header.textContent = `[${category.toUpperCase()}]`;
+            container.appendChild(header);
+
+            items.forEach((fact, i) => {
+                const item = document.createElement('div');
+                item.className = 'list-item fact-item';
+                item.style.animationDelay = `${i * 0.06}s`;
+                item.innerHTML = `
+                    <div class="list-item-content">
+                        <div><span class="fact-key">${fact.key}:</span> ${fact.value}</div>
+                        <button class="delete-btn" title="Delete fact">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                        </button>
+                    </div>`;
+                item.querySelector('.delete-btn').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    confirmDelete('fact', fact.id, `${fact.key}: ${fact.value}`);
+                });
+                container.appendChild(item);
+            });
         });
     }
 
@@ -758,19 +852,23 @@
     const docSearch = $('#doc-search');
     if (docSearch) docSearch.addEventListener('input', () => {
         const q = docSearch.value.toLowerCase();
-        renderDocuments(q ? _allDocs.filter(d => d.name.toLowerCase().includes(q) || d.category.toLowerCase().includes(q)) : _allDocs);
+        renderDocuments(q ? _allDocs.filter(d =>
+            d.name.toLowerCase().includes(q) ||
+            d.category.toLowerCase().includes(q) ||
+            (d.tags || []).some(t => t.toLowerCase().includes(q))
+        ) : _allDocs);
     });
 
     const credSearch = $('#cred-search');
     if (credSearch) credSearch.addEventListener('input', () => {
         const q = credSearch.value.toLowerCase();
-        renderCredentials(q ? _allCreds.filter(c => c.service.toLowerCase().includes(q) || c.username.toLowerCase().includes(q)) : _allCreds);
+        renderCredentials(q ? _allCreds.filter(c => c.service.toLowerCase().includes(q) || (c.username || '').toLowerCase().includes(q)) : _allCreds);
     });
 
     const factSearch = $('#fact-search');
     if (factSearch) factSearch.addEventListener('input', () => {
         const q = factSearch.value.toLowerCase();
-        renderFacts(q ? _allFacts.filter(f => f.text.toLowerCase().includes(q)) : _allFacts);
+        renderFacts(q ? _allFacts.filter(f => f.key.toLowerCase().includes(q) || f.value.toLowerCase().includes(q) || (f.category || '').toLowerCase().includes(q)) : _allFacts);
     });
 
     // ====== Database Viewer ======
@@ -868,6 +966,12 @@
     // ====== Keyboard Shortcuts ======
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
+            const delModal = $('#delete-modal');
+            if (delModal && !delModal.classList.contains('hidden')) {
+                _pendingDelete = null;
+                delModal.classList.add('hidden');
+                return;
+            }
             const modal = $('#settings-modal');
             if (modal && !modal.classList.contains('hidden')) {
                 modal.classList.add('hidden');

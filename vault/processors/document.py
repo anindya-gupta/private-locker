@@ -109,3 +109,92 @@ def guess_category(filename: str, extracted_text: str) -> str:
             return category
 
     return "general"
+
+
+MEDICAL_SUBCATEGORIES = {
+    "eye": ["eye", "ophthalmol", "optom", "vision", "retina", "cataract", "glaucoma", "myopia", "hypermetropia",
+            "astigmatism", "spectacle", "glasses", "lens", "cornea", "lasik", "optic"],
+    "skin": ["skin", "dermatol", "eczema", "acne", "psoriasis", "rash", "melanoma", "mole", "fungal"],
+    "dental": ["dental", "dentist", "tooth", "teeth", "oral", "gum", "cavity", "root canal", "orthodont", "braces"],
+    "cardiac": ["cardiac", "cardiol", "heart", "ecg", "ekg", "echocardiogram", "blood pressure", "hypertension", "cholesterol"],
+    "orthopedic": ["ortho", "bone", "fracture", "joint", "spine", "x-ray", "xray", "mri", "ct scan"],
+    "general": ["general", "physician", "fever", "cold", "cough", "flu"],
+    "blood": ["blood test", "cbc", "hemoglobin", "platelet", "wbc", "rbc", "blood report", "hematology", "pathology"],
+}
+
+
+def guess_medical_subcategory(filename: str, extracted_text: str) -> str | None:
+    """Detect medical sub-category from filename and text content."""
+    combined = (filename.lower() + " " + extracted_text.lower()[:1000])
+    for subcat, keywords in MEDICAL_SUBCATEGORIES.items():
+        if any(kw in combined for kw in keywords):
+            return subcat
+    return None
+
+
+def extract_document_metadata(filename: str, extracted_text: str, category: str) -> dict:
+    """Extract rich metadata from document text using regex patterns.
+
+    Returns dict with optional keys: sub_category, doctor, doc_date, keywords.
+    """
+    import re
+    from datetime import datetime
+
+    meta: dict = {}
+    lower_text = extracted_text.lower()
+    lower_name = filename.lower()
+    combined = lower_name + " " + lower_text[:2000]
+
+    if category == "medical":
+        subcat = guess_medical_subcategory(filename, extracted_text)
+        if subcat:
+            meta["sub_category"] = subcat
+
+    doctor_patterns = [
+        r"(?:[Dd]r\.?|[Dd]octor)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})",
+        r"(?:consulting|attending|referred by|treated by)\s*:?\s*(?:[Dd]r\.?\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})",
+    ]
+    for pat in doctor_patterns:
+        m = re.search(pat, extracted_text)
+        if m:
+            meta["doctor"] = m.group(1).strip()
+            break
+
+    date_patterns = [
+        r"(?:date|dated|report date|visit date|consultation date)\s*:?\s*(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4})",
+        r"(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4})",
+        r"(\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{2,4})",
+        r"((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2},?\s+\d{2,4})",
+    ]
+    for pat in date_patterns:
+        m = re.search(pat, extracted_text, re.IGNORECASE)
+        if m:
+            date_str = m.group(1).strip()
+            for fmt in ("%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%d.%m.%Y",
+                        "%d %B %Y", "%d %b %Y", "%B %d, %Y", "%b %d, %Y",
+                        "%d/%m/%y", "%m/%d/%y"):
+                try:
+                    parsed = datetime.strptime(date_str, fmt)
+                    meta["doc_date"] = parsed.strftime("%Y-%m-%d")
+                    break
+                except ValueError:
+                    continue
+            if "doc_date" not in meta:
+                meta["doc_date"] = date_str
+            break
+
+    kw_pools = {
+        "prescription": ["prescription", "rx", "prescribed"],
+        "report": ["report", "test result", "lab result", "investigation"],
+        "certificate": ["certificate", "certified", "certification"],
+        "receipt": ["receipt", "invoice", "bill", "payment"],
+        "insurance_claim": ["claim", "insurance", "tpa", "cashless"],
+    }
+    extracted_kw = []
+    for kw, triggers in kw_pools.items():
+        if any(t in combined for t in triggers):
+            extracted_kw.append(kw)
+    if extracted_kw:
+        meta["keywords"] = extracted_kw
+
+    return meta

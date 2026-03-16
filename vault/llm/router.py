@@ -115,6 +115,37 @@ class LLMRouter:
         except (json.JSONDecodeError, IndexError):
             return []
 
+    async def extract_document_metadata(self, doc_name: str, category: str, doc_text: str) -> dict:
+        """Use the LLM to extract rich metadata from a document."""
+        from vault.llm.prompts import DOCUMENT_METADATA_PROMPT
+
+        prompt = DOCUMENT_METADATA_PROMPT.format(
+            doc_name=doc_name,
+            category=category,
+            doc_text=doc_text[:2000],
+        )
+        response = await self.complete(prompt, temperature=0.1, max_tokens=512)
+
+        try:
+            cleaned = response.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.split("\n", 1)[1].rsplit("```", 1)[0]
+            meta = json.loads(cleaned)
+            if isinstance(meta, dict):
+                return {k: v for k, v in meta.items() if v is not None}
+            return {}
+        except (json.JSONDecodeError, IndexError):
+            return {}
+
+    async def answer_multi_document_question(self, question: str, documents_context: str) -> str:
+        from vault.llm.prompts import MULTI_DOCUMENT_QA_PROMPT
+
+        prompt = MULTI_DOCUMENT_QA_PROMPT.format(
+            documents_context=documents_context,
+            question=question,
+        )
+        return await self.complete(prompt, temperature=0.1, max_tokens=2048)
+
     async def extract_birthdays(self, message: str) -> list[dict[str, str]]:
         from vault.llm.prompts import BIRTHDAY_EXTRACTION_PROMPT
 

@@ -21,7 +21,7 @@ from typing import Any, Optional
 from vault.config import VaultConfig
 from vault.llm.router import LLMRouter
 from vault.processors.credentials import CredentialManager
-from vault.processors.document import extract_text, guess_category
+from vault.processors.document import extract_text, guess_category, extract_document_metadata
 from vault.processors.memory import MemoryManager
 from vault.security.session import Session
 from vault.storage.database import VaultDatabase
@@ -202,6 +202,23 @@ class VaultAgent:
                 lines.append(f"  - [{d['category']}] {d['name']}")
             return AgentResponse(text="\n".join(lines))
 
+        doc_query_triggers = [
+            "prescription", "report", "certificate", "document", "doc ",
+            "statement", "receipt", "invoice", "policy", "checkup",
+        ]
+        temporal_words = ["last", "latest", "recent", "newest", "first", "oldest", "earliest", "all my", "show all", "every"]
+        if any(t in lower for t in doc_query_triggers) and any(t in lower for t in temporal_words):
+            return None  # fall through to LLM -> query_document with smart multi-doc handling
+
+        delete_patterns = [
+            r"^(?:delete|remove)\s+(?:my\s+)?(?:the\s+)?(\w+)\s+(?:credential|password|login)s?$",
+            r"^(?:delete|remove)\s+(?:my\s+)?(?:the\s+)?(.+?)(?:\s+document|\s+doc|\s+file)$",
+            r"^(?:delete|remove|forget)\s+(?:my\s+)?(?:the\s+)?(?:fact\s+(?:about\s+)?|memory\s+(?:about\s+)?)(.+)$",
+        ]
+        for dp in delete_patterns:
+            if re.match(dp, lower):
+                return None  # fall through to LLM intent detection -> _handle_delete_item
+
         if lower in ("lock", "lock vault", "lock the vault"):
             self.session.lock()
             return AgentResponse(text="Vault locked. Stay safe!")
@@ -222,19 +239,56 @@ class VaultAgent:
 
         name = message.strip() if message.strip() and message.strip().lower() not in ("", "store", "upload") else file_name
 
+        tags = [category, file_name.split(".")[-1]]
+        regex_meta = extract_document_metadata(file_name, extracted, category) if extracted else {}
+
+        llm_meta: dict = {}
+        if extracted:
+            try:
+                llm_meta = await self.llm.extract_document_metadata(name, category, extracted)
+            except Exception as e:
+                logger.warning("LLM metadata extraction failed: %s", e)
+
+        merged_meta = {**regex_meta, **{k: v for k, v in llm_meta.items() if v}}
+
+        if merged_meta.get("sub_category"):
+            tags.append(f"sub:{merged_meta['sub_category']}")
+        if merged_meta.get("doctor"):
+            tags.append(f"doctor:{merged_meta['doctor']}")
+        if merged_meta.get("doc_date"):
+            tags.append(f"date:{merged_meta['doc_date']}")
+        if merged_meta.get("summary"):
+            tags.append(f"summary:{merged_meta['summary']}")
+        for kw in merged_meta.get("keywords", []):
+            tags.append(f"kw:{kw}")
+
+        vector_meta = {"name": name, "category": category}
+        if merged_meta.get("sub_category"):
+            vector_meta["sub_category"] = merged_meta["sub_category"]
+        if merged_meta.get("doctor"):
+            vector_meta["doctor"] = merged_meta["doctor"]
+        if merged_meta.get("doc_date"):
+            vector_meta["doc_date"] = merged_meta["doc_date"]
+
         doc_id = self.db.store_document(
             name=name,
             category=category,
             encryption_key=keys.db_key,
             file_ref=file_ref,
             extracted_text=extracted or None,
-            tags=[category, file_name.split(".")[-1]],
+            tags=tags,
         )
 
         if extracted:
-            self.vector_store.add_document(doc_id, extracted, {"name": name, "category": category})
+            self.vector_store.add_document(doc_id, extracted, vector_meta)
 
         summary = f"Stored '{name}' under [{category}]."
+        if merged_meta.get("sub_category"):
+            summary += f" Sub-type: {merged_meta['sub_category']}."
+        if merged_meta.get("doctor"):
+            summary += f" Doctor: {merged_meta['doctor']}."
+        if merged_meta.get("doc_date"):
+            summary += f" Date: {merged_meta['doc_date']}."
         if extracted:
             preview = extracted[:200] + "..." if len(extracted) > 200 else extracted
             summary += f"\n\nExtracted text preview:\n{preview}"
@@ -327,32 +381,128 @@ class VaultAgent:
         return AgentResponse(text="I don't have that information. You can tell me and I'll remember it.")
 
     async def _handle_query_document(self, message: str, entities: dict, keys: Any) -> AgentResponse:
-        doc = None
+        lower = message.lower()
 
-        results = self.vector_store.search(message, n_results=3)
-        if results:
-            doc = self.db.get_document(results[0]["id"], keys.db_key)
+        wants_latest = any(w in lower for w in ["last", "latest", "most recent", "newest", "current"])
+        wants_oldest = any(w in lower for w in ["first", "oldest", "earliest"])
+        wants_all = any(w in lower for w in ["all my", "show all", "every", "list all", "all of"])
 
-        if not doc or not doc.get("extracted_text"):
-            docs = self.db.search_documents(message, keys.db_key)
-            if docs:
-                for d in docs:
-                    if d.get("extracted_text"):
-                        doc = d
-                        break
+        candidates = self._find_relevant_documents(message, keys)
 
-        if not doc or not doc.get("extracted_text"):
-            all_docs = self.db.list_documents(keys.db_key)
-            for d in all_docs:
-                if d.get("extracted_text"):
-                    doc = d
-                    break
+        if not candidates:
+            return AgentResponse(text="I couldn't find any documents matching your query. Try uploading the document first.")
 
-        if not doc or not doc.get("extracted_text"):
-            return AgentResponse(text="I couldn't find any documents with readable text. Try uploading the document first.")
+        if wants_latest or wants_oldest:
+            sorted_docs = self._sort_documents_by_date(candidates, newest_first=wants_latest)
+            doc = sorted_docs[0]
+            answer = await self.llm.answer_document_question(
+                message, doc["name"], doc["extracted_text"]
+            )
+            date_info = self._get_doc_date_label(doc)
+            source_note = f"\n\n_Source: {doc['name']}"
+            if date_info:
+                source_note += f" ({date_info})"
+            source_note += "_"
+            return AgentResponse(text=answer + source_note, data={"source_document": doc["name"]})
 
+        if wants_all or len(candidates) > 1:
+            context_parts = []
+            for i, doc in enumerate(candidates[:5], 1):
+                date_label = self._get_doc_date_label(doc)
+                header = f"[Document {i}] {doc['name']}"
+                if date_label:
+                    header += f" ({date_label})"
+                context_parts.append(f"{header}\n{doc['extracted_text'][:1500]}")
+
+            documents_context = "\n\n---\n\n".join(context_parts)
+            answer = await self.llm.answer_multi_document_question(message, documents_context)
+            sources = [d["name"] for d in candidates[:5]]
+            return AgentResponse(text=answer, data={"source_documents": sources})
+
+        doc = candidates[0]
         answer = await self.llm.answer_document_question(message, doc["name"], doc["extracted_text"])
         return AgentResponse(text=answer, data={"source_document": doc["name"]})
+
+    def _find_relevant_documents(self, query: str, keys: Any) -> list[dict]:
+        """Find all relevant documents for a query using vector search + keyword fallback."""
+        seen_ids: set[str] = set()
+        candidates: list[dict] = []
+
+        results = self.vector_store.search(query, n_results=10)
+        for r in results:
+            doc = self.db.get_document(r["id"], keys.db_key)
+            if doc and doc.get("extracted_text") and doc["id"] not in seen_ids:
+                doc["_distance"] = r.get("distance", 1.0)
+                candidates.append(doc)
+                seen_ids.add(doc["id"])
+
+        keyword_docs = self.db.search_documents(query, keys.db_key)
+        for d in keyword_docs:
+            if d.get("extracted_text") and d["id"] not in seen_ids:
+                candidates.append(d)
+                seen_ids.add(d["id"])
+
+        lower = query.lower()
+        tag_filters = self._extract_query_filters(lower)
+        if tag_filters:
+            all_docs = self.db.list_documents(keys.db_key)
+            for d in all_docs:
+                if d["id"] in seen_ids or not d.get("extracted_text"):
+                    continue
+                doc_tags = " ".join(d.get("tags", [])).lower()
+                doc_text = (d.get("name", "") + " " + (d.get("extracted_text") or "")[:500]).lower()
+                if any(f in doc_tags or f in doc_text for f in tag_filters):
+                    candidates.append(d)
+                    seen_ids.add(d["id"])
+
+        return candidates
+
+    @staticmethod
+    def _extract_query_filters(query: str) -> list[str]:
+        """Pull out filter terms from the query for tag/text matching."""
+        filters = []
+        medical_terms = {
+            "eye": "eye", "vision": "eye", "ophthalmol": "eye", "spectacle": "eye", "glasses": "eye",
+            "skin": "skin", "dermatol": "skin",
+            "dental": "dental", "tooth": "dental", "teeth": "dental",
+            "cardiac": "cardiac", "heart": "cardiac", "ecg": "cardiac",
+            "ortho": "orthopedic", "bone": "orthopedic", "fracture": "orthopedic",
+            "blood test": "blood", "blood report": "blood", "cbc": "blood",
+        }
+        for term, subcat in medical_terms.items():
+            if term in query:
+                filters.append(subcat)
+
+        doctor_match = re.search(r"(?:dr\.?|doctor)\s+(\w+(?:\s+\w+)?)", query, re.IGNORECASE)
+        if doctor_match:
+            filters.append(doctor_match.group(1).lower())
+
+        return filters
+
+    def _sort_documents_by_date(self, docs: list[dict], newest_first: bool = True) -> list[dict]:
+        """Sort documents by date -- tries tag-embedded date first, falls back to created_at."""
+        def _get_sort_date(doc: dict) -> float:
+            for tag in doc.get("tags", []):
+                if tag.startswith("date:"):
+                    date_str = tag[5:]
+                    try:
+                        return datetime.strptime(date_str, "%Y-%m-%d").timestamp()
+                    except ValueError:
+                        pass
+            return doc.get("created_at", 0)
+
+        return sorted(docs, key=_get_sort_date, reverse=newest_first)
+
+    @staticmethod
+    def _get_doc_date_label(doc: dict) -> str | None:
+        """Get a human-readable date label from a document's tags or created_at."""
+        for tag in doc.get("tags", []):
+            if tag.startswith("date:"):
+                return tag[5:]
+        created = doc.get("created_at")
+        if created:
+            return datetime.fromtimestamp(created).strftime("%b %d, %Y")
+        return None
 
     async def _handle_retrieve_document(self, message: str, entities: dict, keys: Any) -> AgentResponse:
         doc_name = entities.get("document", "")
@@ -421,29 +571,108 @@ class VaultAgent:
         return AgentResponse(text="\n".join(parts))
 
     async def _handle_delete_item(self, message: str, entities: dict, keys: Any) -> AgentResponse:
-        return AgentResponse(text="To delete an item, please specify what you want to remove (e.g., 'delete my Netflix credentials' or 'delete Aadhaar document').")
+        lower = message.lower()
+
+        if any(w in lower for w in ["credential", "password", "login"]):
+            service_match = re.search(
+                r"(?:delete|remove|forget)\s+(?:my\s+)?(?:the\s+)?(\w+)\s+(?:credential|password|login)",
+                lower,
+            )
+            if not service_match:
+                service_match = re.search(
+                    r"(?:credential|password|login)\s+(?:for\s+)?(\w+)", lower,
+                )
+            if service_match:
+                service = service_match.group(1)
+                creds = self.cred_manager.list_all(keys.cred_key)
+                matches = [c for c in creds if service in c["service"].lower()]
+                if matches:
+                    for c in matches:
+                        self.db.delete_credential(c["id"])
+                    names = ", ".join(c["service"] for c in matches)
+                    return AgentResponse(text=f"Deleted credential(s): {names}")
+                return AgentResponse(text=f"No credentials found matching '{service}'.")
+
+        if any(w in lower for w in ["document", "doc", "file"]):
+            doc_match = re.search(
+                r"(?:delete|remove)\s+(?:my\s+)?(?:the\s+)?(.+?)(?:\s+document|\s+doc|\s+file)",
+                lower,
+            )
+            if not doc_match:
+                doc_match = re.search(
+                    r"(?:document|doc|file)\s+(?:called\s+|named\s+)?[\"']?(.+?)[\"']?\s*$",
+                    lower,
+                )
+            if doc_match:
+                query = doc_match.group(1).strip()
+                docs = self.db.search_documents(query, keys.db_key)
+                if docs:
+                    doc = docs[0]
+                    if doc.get("file_ref"):
+                        self.file_vault.delete(doc["file_ref"])
+                    self.vector_store.delete_document(doc["id"])
+                    self.db.delete_document(doc["id"])
+                    return AgentResponse(text=f"Deleted document: {doc['name']}")
+                return AgentResponse(text=f"No documents found matching '{query}'.")
+
+        if any(w in lower for w in ["fact", "memory", "remember"]):
+            fact_match = re.search(
+                r"(?:delete|remove|forget)\s+(?:my\s+)?(?:the\s+)?(?:fact\s+(?:about\s+)?|memory\s+(?:about\s+)?)?(.+?)(?:\s+fact|\s+memory)?$",
+                lower,
+            )
+            if fact_match:
+                key = fact_match.group(1).strip()
+                facts = self.memory.list_all(keys.db_key)
+                matches = [f for f in facts if key in f["key"].lower() or key in f["value"].lower()]
+                if matches:
+                    for f in matches:
+                        self.db.delete_fact(f["id"])
+                    keys_deleted = ", ".join(f["key"] for f in matches)
+                    return AgentResponse(text=f"Deleted fact(s): {keys_deleted}")
+                return AgentResponse(text=f"No facts found matching '{key}'.")
+
+        all_docs = self.db.search_documents(message, keys.db_key)
+        if all_docs:
+            doc = all_docs[0]
+            if doc.get("file_ref"):
+                self.file_vault.delete(doc["file_ref"])
+            self.vector_store.delete_document(doc["id"])
+            self.db.delete_document(doc["id"])
+            return AgentResponse(text=f"Deleted document: {doc['name']}")
+
+        return AgentResponse(
+            text="Please specify what you'd like to delete. For example:\n"
+                 "  - \"delete my Netflix credentials\"\n"
+                 "  - \"delete Aadhaar document\"\n"
+                 "  - \"forget my blood type fact\"\n\n"
+                 "You can also delete items directly from the Documents, Credentials, or Memory views."
+        )
 
     async def _try_document_answer(self, message: str, keys: Any) -> Optional[AgentResponse]:
         """Try to answer a question from stored documents. Returns None if no docs help."""
-        doc = None
-
-        results = self.vector_store.search(message, n_results=3)
-        if results:
-            doc = self.db.get_document(results[0]["id"], keys.db_key)
-
-        if not doc or not doc.get("extracted_text"):
-            all_docs = self.db.list_documents(keys.db_key)
-            for d in all_docs:
-                if d.get("extracted_text"):
-                    doc = d
-                    break
-
-        if not doc or not doc.get("extracted_text"):
+        candidates = self._find_relevant_documents(message, keys)
+        if not candidates:
             return None
 
-        answer = await self.llm.answer_document_question(message, doc["name"], doc["extracted_text"])
+        if len(candidates) == 1:
+            doc = candidates[0]
+            answer = await self.llm.answer_document_question(message, doc["name"], doc["extracted_text"])
+            if answer and "not" not in answer.lower()[:30] and "sorry" not in answer.lower()[:30]:
+                return AgentResponse(text=answer, data={"source_document": doc["name"]})
+            return None
+
+        context_parts = []
+        for i, doc in enumerate(candidates[:3], 1):
+            date_label = self._get_doc_date_label(doc)
+            header = f"[Document {i}] {doc['name']}"
+            if date_label:
+                header += f" ({date_label})"
+            context_parts.append(f"{header}\n{doc['extracted_text'][:1500]}")
+
+        documents_context = "\n\n---\n\n".join(context_parts)
+        answer = await self.llm.answer_multi_document_question(message, documents_context)
         if answer and "not" not in answer.lower()[:30] and "sorry" not in answer.lower()[:30]:
-            return AgentResponse(text=answer, data={"source_document": doc["name"]})
+            return AgentResponse(text=answer, data={"source_documents": [d["name"] for d in candidates[:3]]})
 
         return None
 

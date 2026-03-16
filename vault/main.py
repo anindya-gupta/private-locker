@@ -494,6 +494,95 @@ async def api_stats(request: Request):
     }
 
 
+@app.get("/api/documents")
+async def api_list_documents(request: Request):
+    s = _require_session(request)
+    if not agent or not agent.db._conn:
+        raise HTTPException(500, "Database not available")
+    docs = agent.db.list_documents(s.keys.db_key)
+    return {"documents": [{
+        "id": d["id"], "name": d["name"], "category": d["category"],
+        "tags": d.get("tags", []),
+        "created_at": d.get("created_at"),
+        "updated_at": d.get("updated_at"),
+    } for d in docs]}
+
+
+@app.get("/api/credentials")
+async def api_list_credentials(request: Request):
+    s = _require_session(request)
+    if not agent or not agent.db._conn:
+        raise HTTPException(500, "Database not available")
+    creds = agent.db.list_credentials(s.keys.cred_key)
+    return {"credentials": [{
+        "id": c["id"], "service": c["service"],
+        "username": c.get("username", ""),
+        "url": c.get("url", ""),
+        "created_at": c.get("created_at"),
+    } for c in creds]}
+
+
+@app.get("/api/facts")
+async def api_list_facts(request: Request):
+    s = _require_session(request)
+    if not agent or not agent.db._conn:
+        raise HTTPException(500, "Database not available")
+    facts = agent.db.list_facts(s.keys.db_key)
+    return {"facts": [{
+        "id": f["id"], "category": f.get("category", "general"),
+        "key": f["key"], "value": f["value"],
+        "created_at": f.get("created_at"),
+    } for f in facts]}
+
+
+@app.delete("/api/documents/{doc_id}")
+async def api_delete_document(request: Request, doc_id: str):
+    s = _require_session(request)
+    if not agent or not agent.db._conn:
+        raise HTTPException(500, "Database not available")
+
+    doc = agent.db.get_document(doc_id, s.keys.db_key)
+    if not doc:
+        raise HTTPException(404, "Document not found")
+
+    if doc.get("file_ref"):
+        agent.file_vault.delete(doc["file_ref"])
+    agent.vector_store.delete_document(doc_id)
+    agent.db.delete_document(doc_id)
+
+    return {"status": "ok", "message": f"Deleted document: {doc['name']}"}
+
+
+@app.delete("/api/credentials/{cred_id}")
+async def api_delete_credential(request: Request, cred_id: str):
+    s = _require_session(request)
+    if not agent or not agent.db._conn:
+        raise HTTPException(500, "Database not available")
+
+    creds = agent.db.list_credentials(s.keys.cred_key)
+    cred = next((c for c in creds if c["id"] == cred_id), None)
+    if not cred:
+        raise HTTPException(404, "Credential not found")
+
+    agent.db.delete_credential(cred_id)
+    return {"status": "ok", "message": f"Deleted credential: {cred['service']}"}
+
+
+@app.delete("/api/facts/{fact_id}")
+async def api_delete_fact(request: Request, fact_id: str):
+    s = _require_session(request)
+    if not agent or not agent.db._conn:
+        raise HTTPException(500, "Database not available")
+
+    facts = agent.db.list_facts(s.keys.db_key)
+    fact = next((f for f in facts if f["id"] == fact_id), None)
+    if not fact:
+        raise HTTPException(404, "Fact not found")
+
+    agent.db.delete_fact(fact_id)
+    return {"status": "ok", "message": f"Deleted fact: {fact['key']}"}
+
+
 @app.get("/api/birthdays")
 async def api_birthdays(request: Request):
     s = _require_session(request)

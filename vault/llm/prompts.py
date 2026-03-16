@@ -70,6 +70,41 @@ If no facts to extract, return [].
 
 Facts:"""
 
+DOCUMENT_METADATA_PROMPT = """Analyze this document text and extract structured metadata. Return ONLY a JSON object.
+
+Document name: {doc_name}
+Category: {category}
+Text (first 2000 chars):
+---
+{doc_text}
+---
+
+Extract:
+1. "sub_category": Specific type (e.g., for medical: "eye", "skin", "dental", "cardiac", "orthopedic", "blood_test"; for financial: "tax_return", "bank_statement", "salary_slip"; for identity: "aadhaar", "passport", "pan_card"). Use null if unclear.
+2. "doctor": Doctor/physician name if mentioned. Use null if none.
+3. "doc_date": Date of the document/visit/report in YYYY-MM-DD format. Use null if unclear.
+4. "keywords": Array of 3-5 relevant keywords describing the document content.
+5. "summary": One-line summary of what this document contains.
+
+Respond with ONLY JSON:
+{{"sub_category": "...", "doctor": "...", "doc_date": "...", "keywords": [...], "summary": "..."}}"""
+
+MULTI_DOCUMENT_QA_PROMPT = """You have access to multiple documents from the user's vault. Answer their question using the relevant documents.
+
+Documents:
+{documents_context}
+
+User question: {question}
+
+Rules:
+- If the user asks for "last" or "latest" or "most recent", pick the document with the most recent date.
+- If the user asks for "all" or a broad query, summarize across all relevant documents.
+- Cite which document(s) you're pulling information from.
+- Be precise with numbers, dates, and names.
+- If documents have dates, mention them to help the user identify which is which.
+
+Answer:"""
+
 BIRTHDAY_EXTRACTION_PROMPT = """The user wants to store birthday information. Extract ALL birthdays from the text below.
 
 Return a JSON array where each item has "name" (person's name) and "date" (their birthday).
