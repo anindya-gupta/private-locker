@@ -208,11 +208,17 @@ Everything is encrypted locally. How can I help?</div>
             <div id="view-database" class="view">
                 <div class="view-header">
                     <h2>Database Viewer</h2>
-                    <div class="db-tabs">
-                        <button class="db-tab active" data-table="meta">Meta</button>
-                        <button class="db-tab" data-table="documents">Documents</button>
-                        <button class="db-tab" data-table="credentials">Credentials</button>
-                        <button class="db-tab" data-table="facts">Facts</button>
+                    <div class="view-header-actions">
+                        <button id="reindex-btn" class="reindex-btn" title="Re-extract metadata for all documents">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                            Reindex
+                        </button>
+                        <div class="db-tabs">
+                            <button class="db-tab active" data-table="meta">Meta</button>
+                            <button class="db-tab" data-table="documents">Documents</button>
+                            <button class="db-tab" data-table="credentials">Credentials</button>
+                            <button class="db-tab" data-table="facts">Facts</button>
+                        </div>
                     </div>
                 </div>
                 <div id="db-summary" class="db-summary"></div>

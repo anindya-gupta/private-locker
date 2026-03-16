@@ -946,6 +946,32 @@
         loadDbTable(tab.dataset.table);
     }));
 
+    // ====== Reindex Button ======
+    const reindexBtn = $('#reindex-btn');
+    if (reindexBtn) reindexBtn.addEventListener('click', async () => {
+        reindexBtn.disabled = true;
+        const origText = reindexBtn.innerHTML;
+        reindexBtn.innerHTML = '<svg class="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Reindexing...';
+
+        try {
+            const resp = await fetch('/api/reindex', { method: 'POST' });
+            if (resp.status === 401) { redirectToLogin(); return; }
+            const data = await resp.json();
+            if (resp.ok) {
+                showToast(`Reindexed ${data.updated}/${data.total} documents` + (data.errors ? ` (${data.errors} errors)` : ''), data.errors ? 'error' : 'success');
+                loadDatabase();
+                loadDocuments();
+            } else {
+                showToast(data.detail || 'Reindex failed', 'error');
+            }
+        } catch {
+            showToast('Reindex failed', 'error');
+        } finally {
+            reindexBtn.disabled = false;
+            reindexBtn.innerHTML = origText;
+        }
+    });
+
     // ====== 3D Tilt for Cards ======
     function addTiltEffect(card) {
         card.addEventListener('mousemove', (e) => {

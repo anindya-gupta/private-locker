@@ -159,6 +159,26 @@ class VaultDatabase:
             rows = self._conn.execute("SELECT * FROM documents ORDER BY updated_at DESC").fetchall()
         return [self._decrypt_document_row(r, encryption_key) for r in rows]
 
+    def update_document_meta(self, doc_id: str, category: Optional[str] = None, tags: Optional[list[str]] = None) -> bool:
+        if self._conn is None:
+            raise RuntimeError("Database not open")
+        updates = []
+        params: list[Any] = []
+        if category is not None:
+            updates.append("category = ?")
+            params.append(category)
+        if tags is not None:
+            updates.append("tags = ?")
+            params.append(json.dumps(tags))
+        if not updates:
+            return False
+        updates.append("updated_at = ?")
+        params.append(time.time())
+        params.append(doc_id)
+        with self.transaction() as cur:
+            cur.execute(f"UPDATE documents SET {', '.join(updates)} WHERE id = ?", params)
+            return cur.rowcount > 0
+
     def delete_document(self, doc_id: str) -> bool:
         with self.transaction() as cur:
             cur.execute("DELETE FROM documents WHERE id = ?", (doc_id,))

@@ -403,6 +403,75 @@ async def api_backup(request: Request):
         raise HTTPException(500, str(e))
 
 
+# ===== Reindex Documents =====
+
+@app.post("/api/reindex")
+async def api_reindex(request: Request):
+    """Re-process all existing documents to extract and store rich metadata."""
+    s = _require_session(request)
+    if not agent or not agent.db._conn:
+        raise HTTPException(500, "Database not available")
+
+    from vault.processors.document import extract_document_metadata, guess_category
+
+    docs = agent.db.list_documents(s.keys.db_key)
+    updated = 0
+    errors = 0
+
+    for doc in docs:
+        try:
+            text = doc.get("extracted_text") or ""
+            if not text:
+                continue
+
+            category = guess_category(doc["name"], text)
+            regex_meta = extract_document_metadata(doc["name"], text, category)
+
+            llm_meta: dict = {}
+            try:
+                llm_meta = await agent.llm.extract_document_metadata(doc["name"], category, text)
+            except Exception:
+                pass
+
+            merged = {**regex_meta, **{k: v for k, v in llm_meta.items() if v}}
+
+            tags = [category, doc["name"].rsplit(".", 1)[-1] if "." in doc["name"] else "unknown"]
+            if merged.get("sub_category"):
+                tags.append(f"sub:{merged['sub_category']}")
+            if merged.get("doctor"):
+                tags.append(f"doctor:{merged['doctor']}")
+            if merged.get("doc_date"):
+                tags.append(f"date:{merged['doc_date']}")
+            if merged.get("summary"):
+                tags.append(f"summary:{merged['summary']}")
+            for kw in merged.get("keywords", []):
+                tags.append(f"kw:{kw}")
+
+            agent.db.update_document_meta(doc["id"], category=category, tags=tags)
+
+            vector_meta = {"name": doc["name"], "category": category}
+            if merged.get("sub_category"):
+                vector_meta["sub_category"] = merged["sub_category"]
+            if merged.get("doctor"):
+                vector_meta["doctor"] = merged["doctor"]
+            if merged.get("doc_date"):
+                vector_meta["doc_date"] = merged["doc_date"]
+            agent.vector_store.add_document(doc["id"], text, vector_meta)
+
+            updated += 1
+        except Exception as e:
+            logger.error("Reindex failed for doc %s: %s", doc["id"], e)
+            errors += 1
+
+    return {
+        "status": "ok",
+        "total": len(docs),
+        "updated": updated,
+        "skipped": len(docs) - updated - errors,
+        "errors": errors,
+    }
+
+
 # ===== Database Viewer =====
 
 @app.get("/api/db-viewer")

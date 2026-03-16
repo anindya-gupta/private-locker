@@ -1886,6 +1886,42 @@ button:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important;
     .item-card .delete-btn { opacity: 0.6; }
 }
 
+/* ===== Reindex Button ===== */
+.reindex-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    background: var(--glass);
+    border: 1px solid var(--glass-border);
+    color: var(--text-2);
+    padding: 0.4rem 0.85rem;
+    border-radius: 8px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.reindex-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: rgba(201, 168, 76, 0.08);
+}
+
+.reindex-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.reindex-btn .spin {
+    animation: spinAnim 1s linear infinite;
+}
+
+@keyframes spinAnim {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
 /* ===== Reduced Motion ===== */
 @media (prefers-reduced-motion: reduce) {
     .ring, .ring-core, .orbit-dot, .vault-orb-scene,
