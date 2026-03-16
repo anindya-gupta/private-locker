@@ -146,6 +146,22 @@ class VaultDatabase:
             "SELECT * FROM documents WHERE name LIKE ? OR category LIKE ? OR tags LIKE ?",
             (f"%{query}%", f"%{query}%", f"%{query}%"),
         ).fetchall()
+        if rows:
+            return [self._decrypt_document_row(r, encryption_key) for r in rows]
+
+        words = [w for w in query.lower().split() if len(w) > 2 and w not in (
+            "the", "my", "me", "all", "show", "share", "get", "find", "give",
+            "with", "from", "for", "and", "this", "that",
+        )]
+        if not words:
+            return []
+        conditions = []
+        params: list[str] = []
+        for word in words:
+            conditions.append("(LOWER(name) LIKE ? OR LOWER(category) LIKE ? OR LOWER(tags) LIKE ?)")
+            params.extend([f"%{word}%", f"%{word}%", f"%{word}%"])
+        sql = f"SELECT * FROM documents WHERE {' OR '.join(conditions)}"
+        rows = self._conn.execute(sql, params).fetchall()
         return [self._decrypt_document_row(r, encryption_key) for r in rows]
 
     def list_documents(self, encryption_key: bytes, category: Optional[str] = None) -> list[dict[str, Any]]:

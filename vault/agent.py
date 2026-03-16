@@ -509,7 +509,30 @@ class VaultAgent:
         docs = self.db.search_documents(doc_name or message, keys.db_key)
 
         if not docs:
+            candidates = self._find_relevant_documents(message, keys)
+            if candidates:
+                docs = candidates
+
+        if not docs:
             return AgentResponse(text=f"No documents matching '{doc_name or message}' found.")
+
+        lower = message.lower()
+        wants_all = any(w in lower for w in ["all", "every", "show me all", "share all"])
+        wants_latest = any(w in lower for w in ["last", "latest", "most recent", "newest"])
+
+        if wants_all and len(docs) > 1:
+            lines = [f"Found {len(docs)} matching documents:"]
+            for i, doc in enumerate(docs, 1):
+                date_label = self._get_doc_date_label(doc)
+                line = f"  {i}. [{doc['category']}] {doc['name']}"
+                if date_label:
+                    line += f" ({date_label})"
+                lines.append(line)
+            lines.append("\nAsk me to download a specific one by name.")
+            return AgentResponse(text="\n".join(lines))
+
+        if wants_latest and len(docs) > 1:
+            docs = self._sort_documents_by_date(docs, newest_first=True)
 
         doc = docs[0]
         if doc.get("file_ref"):
