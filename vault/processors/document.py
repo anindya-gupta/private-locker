@@ -183,6 +183,28 @@ def extract_document_metadata(filename: str, extracted_text: str, category: str)
                 meta["doc_date"] = date_str
             break
 
+    expiry_patterns = [
+        r"(?:valid\s*(?:up\s*to|until|till|through|upto)|expir(?:y|es|ation)\s*(?:date)?|date\s*of\s*expir(?:y|ation)|renewal\s*date|due\s*(?:date|by))\s*:?\s*(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4})",
+        r"(?:valid\s*(?:up\s*to|until|till|through|upto)|expir(?:y|es|ation)\s*(?:date)?|date\s*of\s*expir(?:y|ation))\s*:?\s*(\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{2,4})",
+        r"(?:valid\s*(?:up\s*to|until|till|through|upto)|expir(?:y|es|ation)\s*(?:date)?)\s*:?\s*((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2},?\s+\d{2,4})",
+    ]
+    for pat in expiry_patterns:
+        m = re.search(pat, extracted_text, re.IGNORECASE)
+        if m:
+            date_str = m.group(1).strip()
+            for fmt in ("%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%d.%m.%Y",
+                        "%d %B %Y", "%d %b %Y", "%B %d, %Y", "%b %d, %Y",
+                        "%d/%m/%y", "%m/%d/%y"):
+                try:
+                    parsed = datetime.strptime(date_str, fmt)
+                    meta["expiry_date"] = parsed.strftime("%Y-%m-%d")
+                    break
+                except ValueError:
+                    continue
+            if "expiry_date" not in meta:
+                meta["expiry_date"] = date_str
+            break
+
     kw_pools = {
         "prescription": ["prescription", "rx", "prescribed"],
         "report": ["report", "test result", "lab result", "investigation"],

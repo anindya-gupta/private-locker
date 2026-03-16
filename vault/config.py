@@ -27,6 +27,11 @@ class VaultConfig:
     session_timeout: int = 300
     ocr_enabled: bool = True
     embedding_model: str = "all-MiniLM-L6-v2"
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
 
     @property
     def db_path(self) -> Path:
@@ -69,6 +74,11 @@ class VaultConfig:
             "session_timeout": self.session_timeout,
             "ocr_enabled": self.ocr_enabled,
             "embedding_model": self.embedding_model,
+            "smtp_host": self.smtp_host,
+            "smtp_port": self.smtp_port,
+            "smtp_user": self.smtp_user,
+            "smtp_password": self.smtp_password,
+            "smtp_from": self.smtp_from,
         }
         with open(self.config_path, "w") as f:
             yaml.dump(data, f, default_flow_style=False)
@@ -90,6 +100,11 @@ class VaultConfig:
             session_timeout=data.get("session_timeout", 300),
             ocr_enabled=data.get("ocr_enabled", True),
             embedding_model=data.get("embedding_model", "all-MiniLM-L6-v2"),
+            smtp_host=os.environ.get("SMTP_HOST", data.get("smtp_host", "")),
+            smtp_port=int(os.environ.get("SMTP_PORT", data.get("smtp_port", 587))),
+            smtp_user=os.environ.get("SMTP_USER", data.get("smtp_user", "")),
+            smtp_password=os.environ.get("SMTP_PASSWORD", data.get("smtp_password", "")),
+            smtp_from=os.environ.get("SMTP_FROM", data.get("smtp_from", "")),
         )
 
 

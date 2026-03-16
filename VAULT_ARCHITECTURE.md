@@ -13,12 +13,14 @@
 5. [API Endpoints](#5-api-endpoints)
 6. [AI / LLM Pipeline](#6-ai--llm-pipeline)
 7. [Data Flow Diagrams](#7-data-flow-diagrams)
-8. [MCP Integration](#8-mcp-integration)
-9. [CLI Commands](#9-cli-commands)
-10. [Paranoid Mode](#10-paranoid-mode)
-11. [Backup & Recovery](#11-backup--recovery)
-12. [Dependencies](#12-dependencies)
-13. [Configuration Reference](#13-configuration-reference)
+8. [Web UI Architecture](#8-web-ui-architecture)
+9. [Birthday Tracker](#9-birthday-tracker)
+10. [MCP Integration](#10-mcp-integration)
+11. [CLI Commands](#11-cli-commands)
+12. [Paranoid Mode](#12-paranoid-mode)
+13. [Backup & Recovery](#13-backup--recovery)
+14. [Dependencies](#14-dependencies)
+15. [Configuration Reference](#15-configuration-reference)
 
 ---
 
@@ -34,6 +36,7 @@ Vault is a self-hosted, encrypted personal AI assistant that stores documents, l
 | **Document Q&A (RAG)** | "What college did I graduate from?" → reads your uploaded resume |
 | **Credential management** | "My Netflix login is user@email.com, password xyz" → encrypted storage |
 | **Personal memory** | "Remember my blood type is O+" → encrypted fact storage |
+| **Birthday tracking** | "Remember Ankit's birthday on 30th Sept" → stored and shown on dashboard |
 | **Semantic search** | "Find my tax documents" → vector similarity search |
 
 ### High-Level Architecture
@@ -59,7 +62,7 @@ Vault is a self-hosted, encrypted personal AI assistant that stores documents, l
               ▼            ▼            ▼
      ┌──────────────┐ ┌─────────┐ ┌──────────┐
      │    Agent     │ │ Session │ │   Web    │
-     │  (AI Logic)  │ │ Manager │ │   UI     │
+     │  (AI Logic)  │ │  Store  │ │   UI     │
      └──────┬───────┘ └─────────┘ └──────────┘
             │
     ┌───────┼───────┐
@@ -99,7 +102,7 @@ Entry point: vault serve --host 0.0.0.0 --port 8080
 
 Environment variables:
 - `VAULT_DIR=/data` — all encrypted data stored in the `/data` Docker volume
-- `OPENAI_API_KEY` — read from `.env` file (never committed to git)
+- `OPENAI_API_KEY` — read from `.env` file or host environment (never committed to git)
 - `PYTHONUNBUFFERED=1`
 
 ### Container: caddy
@@ -112,7 +115,7 @@ Caddy provides:
 
 Caddyfile:
 ```
-{$VAULT_DOMAIN:vault.yourdomain.com} {
+myprivatelockr.com {
     reverse_proxy vault:8080
     encode gzip
     header {
@@ -149,7 +152,7 @@ Vault uses three storage systems, each serving a distinct purpose:
 
 | System | Technology | What It Stores |
 |--------|-----------|----------------|
-| **Relational DB** | SQLite (plain) | Document metadata, credentials, facts, app config |
+| **Relational DB** | SQLite (plain) | Document metadata, credentials, facts (incl. birthdays), app config |
 | **File Store** | Encrypted files on disk | Original document files (PDF, images, etc.) |
 | **Vector DB** | ChromaDB (local) | Document text embeddings for semantic search |
 
@@ -170,7 +173,7 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 ```
 
-Stores: `schema_version`.
+Stores: `schema_version`, `username`.
 
 **`documents` table** — uploaded document metadata
 
@@ -221,7 +224,7 @@ CREATE INDEX IF NOT EXISTS idx_credentials_service ON credentials(service);
 | `password` | **Yes** | `cred_key` |
 | `notes` | **Yes** | `cred_key` |
 
-**`facts` table** — personal facts and memories
+**`facts` table** — personal facts, memories, and birthdays
 
 ```sql
 CREATE TABLE IF NOT EXISTS facts (
@@ -241,6 +244,8 @@ CREATE INDEX IF NOT EXISTS idx_facts_key ON facts(key);
 |--------|-----------|----------|
 | `key` | No | — |
 | `value` | **Yes** | `db_key` |
+
+Fact categories include: `general`, `personal`, `medical`, `financial`, `preferences`, `work`, and **`birthday`** (for birthday tracking).
 
 ### 3.2 FileVault (Encrypted File Storage)
 
@@ -363,21 +368,33 @@ Every single encrypt operation generates a fresh random nonce, ensuring that enc
 
 ### 4.4 Session Management
 
-Encryption keys exist **only in process memory** and are never written to disk.
+Vault uses **per-browser, token-based sessions** managed by `SessionStore`. Each browser/device gets its own isolated session with its own encryption keys in memory.
+
+```
+Browser A (desktop)  ──cookie:token_A──► SessionStore
+                                            │
+Browser B (phone)    ──cookie:token_B──►    ├── token_A → Session (keys, last_active)
+                                            ├── token_B → Session (keys, last_active)
+                                            └── ...
+```
 
 | Behavior | Detail |
 |----------|--------|
-| **Unlock** | Password verified against stored token; if valid, all three keys derived and held in memory |
-| **Lock** | All keys wiped from memory; `_keys = None`, `_locked = True` |
+| **Unlock** | Password (+ optional username) verified; new session token created; `DerivedKeys` held in memory for that session |
+| **Lock** | Session's keys wiped; cookie cleared; redirects to `/login?mode=lock` (password-only) |
+| **Logout** | Session destroyed from `SessionStore`; cookie cleared; redirects to `/login` (username + password) |
 | **Auto-lock** | After 300 seconds of inactivity (configurable via `session_timeout`) |
 | **Activity tracking** | Every access to `session.keys` resets the inactivity timer |
-| **Process restart** | Keys are lost; user must re-enter password |
+| **Process restart** | All sessions lost; every user must re-enter password |
+| **Cookie** | `vault_sid`, HTTP-only, SameSite=Lax, Secure in production |
+
+**Lock vs. Logout:** Locking preserves the username context (password-only reauth). Logging out destroys the session entirely (full username + password reauth).
 
 ### 4.5 Password Verification
 
 Vault never stores the master password. Instead:
 
-1. On first setup, a **verification token** is generated: `generate_verification_token(password, salt)` — a deterministic output of the password + salt that can only be reproduced with the correct password.
+1. On first setup, a **verification token** is generated: `generate_verification_token(password, salt)` — encrypts a known plaintext (`b"VAULT_VERIFY_TOKEN_V1"`) with the derived `db_key`.
 2. On unlock, the token is recomputed and compared to the stored token.
 3. The token cannot be reversed to obtain the password.
 
@@ -385,7 +402,15 @@ Stored files:
 - `{vault_dir}/data/.salt` — 32-byte Argon2 salt
 - `{vault_dir}/data/.verify_token` — verification token
 
-### 4.6 Rate Limiting
+### 4.6 Username Support
+
+Vault optionally supports a username set during initial setup. When configured:
+- The username is stored in the `meta` table (plaintext, not a secret)
+- `SessionStore` enforces username match during unlock
+- The login page shows both username and password fields
+- The lock screen shows password only (username already known)
+
+### 4.7 Rate Limiting
 
 The `/api/unlock` endpoint is rate-limited:
 
@@ -397,7 +422,7 @@ The `/api/unlock` endpoint is rate-limited:
 
 Implementation: per-IP attempt timestamps stored in a `defaultdict(list)`, pruned each request.
 
-### 4.7 HTTP Security Headers
+### 4.8 HTTP Security Headers
 
 Applied to every response via middleware:
 
@@ -416,42 +441,99 @@ Additionally, Caddy strips the `Server` header to hide server identity.
 
 ## 5. API Endpoints
 
-All endpoints are served by FastAPI (Uvicorn) on port 8080.
+All endpoints are served by FastAPI (Uvicorn) on port 8080 (Docker) or port 8000 (local development).
 
-### Endpoint Reference
+### Page Routes
 
-| Method | Path | Auth Required | Rate Limited | Description |
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | Redirects to `/setup`, `/login`, or `/app` based on vault state |
+| `GET` | `/setup` | First-time setup page (create username + master password) |
+| `GET` | `/login` | Login/unlock page. Accepts `?mode=lock` for password-only mode |
+| `GET` | `/app` | Main application (SPA shell) |
+| `GET` | `/app/{path}` | Client-side routes: `/app/chat`, `/app/docs`, `/app/credentials`, `/app/memory`, `/app/database` |
+
+### API Endpoint Reference
+
+| Method | Path | Auth | Rate Limited | Description |
 |--------|------|:---:|:---:|-------------|
-| `GET` | `/` | No | No | Serves `setup.html`, `unlock.html`, or `index.html` based on vault state |
-| `POST` | `/api/init` | No | No | First-time initialization — sets master password |
-| `POST` | `/api/unlock` | No | **Yes** (5/min/IP) | Unlock vault with master password |
-| `POST` | `/api/lock` | No | No | Lock vault, wipe keys from memory |
-| `GET` | `/api/status` | No | No | Returns `{initialized, locked, paranoid_mode}` |
+| `POST` | `/api/init` | No | No | First-time initialization — sets username + master password |
+| `POST` | `/api/unlock` | No | **Yes** (5/min/IP) | Unlock vault with username + password |
+| `POST` | `/api/lock` | No | No | Lock session, wipe keys, clear cookie |
+| `POST` | `/api/logout` | No | No | Destroy session entirely, clear cookie |
+| `GET` | `/api/status` | No | No | Returns `{initialized, locked, has_username, paranoid_mode, active_sessions}` |
 | `POST` | `/api/chat` | **Yes** | No | Main interaction endpoint (text + optional file upload) |
 | `POST` | `/api/change-password` | **Yes** | No | Change master password, re-encrypt all data |
 | `POST` | `/api/backup` | **Yes** | No | Create encrypted backup file |
+| `GET` | `/api/stats` | **Yes** | No | Dashboard stats: documents, credentials, facts, sessions, birthdays |
+| `GET` | `/api/birthdays` | **Yes** | No | All stored birthdays sorted by proximity with `days_until` |
+| `GET` | `/api/db-viewer` | **Yes** | No | Database summary (table names, column info, row counts) |
+| `GET` | `/api/db-viewer/{table}` | **Yes** | No | Rows for a specific table (passwords masked) |
 
 ### Request/Response Details
 
 **`POST /api/init`**
 ```
-Request:  { "password": "string (min 8 chars)" }
+Request:  { "username": "string (optional)", "password": "string (min 8 chars)" }
 Response: { "status": "initialized" }
 ```
 
 **`POST /api/unlock`**
 ```
-Request:  { "password": "string" }
-Response: { "status": "unlocked" }    — 200
-           { "detail": "..." }        — 401 (wrong password)
+Request:  { "password": "string", "username": "string (if configured)" }
+Response: { "status": "unlocked" }    — 200 (sets vault_sid cookie)
+           { "detail": "..." }        — 401 (wrong credentials)
            { "detail": "..." }        — 429 (rate limited)
+```
+
+**`POST /api/lock`**
+```
+Response: { "status": "locked" }      — clears cookie
+```
+
+**`POST /api/logout`**
+```
+Response: { "status": "logged_out" }  — destroys session, clears cookie
+```
+
+**`GET /api/status`**
+```
+Response: {
+    "initialized": true,
+    "locked": true/false,
+    "has_username": true/false,
+    "paranoid_mode": false,
+    "active_sessions": 2
+}
 ```
 
 **`POST /api/chat`**
 ```
 Request:  FormData { message: "string", file?: File }
 Response: { "text": "string", "file"?: { "name": "string", "data": "base64" } }
-           — 401 if locked
+           — 401 if no valid session
+```
+
+**`GET /api/stats`**
+```
+Response: {
+    "documents": 5,
+    "credentials": 3,
+    "facts": 12,
+    "active_sessions": 1,
+    "total_birthdays": 8,
+    "upcoming_birthdays": 2
+}
+```
+
+**`GET /api/birthdays`**
+```
+Response: {
+    "birthdays": [
+        { "name": "Ankit", "date": "30th sept", "days_until": 199 },
+        { "name": "Rishika Didi", "date": "20th mar", "days_until": 5 }
+    ]
+}
 ```
 
 **`POST /api/change-password`**
@@ -464,9 +546,9 @@ Response: { "status": "password_changed" }
 
 ```
 GET / →
-  if not initialized → setup.html
-  if locked          → unlock.html
-  if unlocked        → index.html (main app)
+  if not initialized (no .salt file) → redirect /setup
+  if no valid session cookie         → redirect /login
+  if valid session                   → redirect /app
 ```
 
 ---
@@ -503,6 +585,12 @@ User sends message (+ optional file)
             │ No
             ▼
    ┌──────────────────┐
+   │ Birthday CSV?    │──── Yes ──► _handle_birthday_csv()
+   │ (file upload)    │              (parse CSV, store birthdays)
+   └────────┬─────────┘
+            │ No
+            ▼
+   ┌──────────────────┐
    │ File attached?   │──── Yes ──► _handle_store_document()
    └────────┬─────────┘              (skip intent detection)
             │ No
@@ -535,10 +623,15 @@ These patterns are handled instantly via regex, without any LLM call:
 | "what is my {service} login/password?" | Retrieve credential |
 | "remember my {key} is {value}" | Store fact |
 | "what is my {key}?" | Recall fact |
+| "save birthday: Name, Date" | Store birthday |
+| "remember Name's birthday on Date" | Store birthday |
+| "Name's birthday is Date" | Store birthday |
+| "list birthdays" / "show birthdays" | List all birthdays |
+| "when is Name's birthday?" | Query specific birthday |
 | "list documents/credentials/facts" | List items |
 | "lock vault" | Lock session |
 
-### 6.4 Intent Types (10)
+### 6.4 Intent Types (12)
 
 | Intent | Description | LLM Used? |
 |--------|-------------|-----------|
@@ -549,6 +642,8 @@ These patterns are handled instantly via regex, without any LLM call:
 | `retrieve_credential` | Get a stored login/password | No |
 | `remember_fact` | Store a personal fact | Sometimes (extraction) |
 | `recall_fact` | Retrieve a stored fact | No |
+| `store_birthdays` | Store one or more birthday entries | Sometimes (extraction) |
+| `recall_birthdays` | Query about birthdays | No |
 | `list_items` | List stored items | No |
 | `delete_item` | Delete an item | No |
 | `general` | General chat, greetings, questions | **Yes** |
@@ -560,6 +655,7 @@ These patterns are handled instantly via regex, without any LLM call:
 | `detect_intent()` | INTENT_DETECTION_PROMPT | 0.1 | 256 | Every non-local-resolved message |
 | `answer_document_question()` | DOCUMENT_QA_PROMPT | 0.1 | 1024 | Document Q&A (RAG) |
 | `extract_facts()` | FACT_EXTRACTION_PROMPT | 0.1 | 512 | When user states facts in free-form |
+| `extract_birthdays()` | BIRTHDAY_EXTRACTION_PROMPT | 0.1 | 2048 | Bulk birthday parsing from freeform text |
 | `complete()` | SYSTEM_PROMPT | 0.3 | 1024 | General conversation |
 
 ### 6.6 System Prompts
@@ -567,9 +663,10 @@ These patterns are handled instantly via regex, without any LLM call:
 | Prompt | Purpose |
 |--------|---------|
 | **SYSTEM_PROMPT** | Defines Vault's identity and capabilities for general chat |
-| **INTENT_DETECTION_PROMPT** | Classifies user message into one of 10 intents; returns JSON with `{intent, entities, confidence}` |
+| **INTENT_DETECTION_PROMPT** | Classifies user message into one of 12 intents; returns JSON with `{intent, entities, confidence}` |
 | **DOCUMENT_QA_PROMPT** | RAG prompt: given document name, text, and question — answer from the document only |
 | **FACT_EXTRACTION_PROMPT** | Extracts structured `[{key, value}]` pairs from free-form text |
+| **BIRTHDAY_EXTRACTION_PROMPT** | Extracts `[{name, date}]` pairs from birthday lists in any format |
 
 ---
 
@@ -702,7 +799,14 @@ User says: "My blood type is O+"
      │                                  │
      ▼◄─────────────────────────────────┘
 ┌──────────────────────┐
-│ 2. Encrypt value     │   AES-256-GCM with db_key
+│ 2. Categorize        │   _guess_fact_category():
+│                      │   birthday / medical / personal / financial /
+│                      │   preferences / work / general
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│ 3. Encrypt value     │   AES-256-GCM with db_key
 │    Store in SQLite   │   Key stored plaintext (for lookup)
 │    (facts table)     │   Value stored as encrypted blob
 └──────────────────────┘
@@ -710,7 +814,135 @@ User says: "My blood type is O+"
 
 ---
 
-## 8. MCP Integration
+## 8. Web UI Architecture
+
+### 8.1 Technology Stack
+
+The web UI is a single-page application built with vanilla JavaScript (no frameworks), server-side rendered HTML templates via Jinja2, and a dark-themed CSS design system.
+
+| Layer | Technology |
+|-------|-----------|
+| Templates | Jinja2 (server-rendered) |
+| JavaScript | Vanilla ES6+, no build step |
+| CSS | Custom properties, flexbox/grid, media queries |
+| Fonts | Outfit (auth titles), system font stack (app) |
+| Routing | `history.pushState` for SPA navigation |
+
+### 8.2 Authentication Pages
+
+The setup (`/setup`) and login (`/login`) pages use a **full-viewport split layout** with an immersive animated orb:
+
+```
+┌──────────────────────────────────────────────────┐
+│                                                  │
+│   ┌──────────────┐   ┌────────────────────────┐  │
+│   │              │   │                        │  │
+│   │  Animated    │   │   Brand + Title        │  │
+│   │  Vault Orb   │   │   Username field       │  │
+│   │  (SVG rings, │   │   Password field       │  │
+│   │   particles, │   │   Submit button        │  │
+│   │   parallax)  │   │                        │  │
+│   │              │   │                        │  │
+│   └──────────────┘   └────────────────────────┘  │
+│     .auth-visual          .auth-panel            │
+│                                                  │
+└──────────────────────────────────────────────────┘
+                    Desktop layout
+
+On mobile (≤768px): stacks vertically (orb on top, form below)
+```
+
+**Orb animation features (`auth-effects.js`):**
+- Concentric SVG rings with spin/pulse animations
+- Orbiting dots around the orb
+- Background particle field
+- Mouse parallax (desktop) / device orientation parallax (mobile)
+- Input-reactive effects: rings pulse brighter as user types, dots speed up
+- **Reject animation:** Rings/icon flash red, form shakes on wrong password
+- **Unlock animation:** Choreographed 6-phase sequence — ring acceleration, color shift to green, shackle lift, shockwave particle burst, expanding rings, container fade-out
+
+**Visual states:**
+- Setup: Green-tinted "welcoming" orb
+- Login: Amber/gold "locked" orb with shackle icon
+- Lock screen: Password-only, "Vault Locked" heading
+- Logout screen: Username + password, "Welcome back" heading
+
+### 8.3 Main Application
+
+The main app (`/app`) is a sidebar-based SPA with five views:
+
+| View | Path | Features |
+|------|------|----------|
+| **Chat** | `/app/chat` | AI conversation, file upload, typing indicators, toast notifications |
+| **Documents** | `/app/docs` | Card grid, drag-and-drop upload, search-as-you-type, 3D tilt effect |
+| **Credentials** | `/app/credentials` | List view, search-as-you-type, password masking |
+| **Memory** | `/app/memory` | Categorized facts, search-as-you-type |
+| **Database** | `/app/database` | Raw database viewer with table tabs |
+
+**Dashboard (Chat view) components:**
+- **Stat cards:** Documents, Credentials, Facts, Sessions, Birthdays (with animated counters)
+- **Birthday widget:** Shows all stored birthdays sorted by proximity, with badges (TODAY, Tomorrow, In X days) and highlighting for upcoming entries
+- **Ambient particle canvas:** Mouse-reactive floating particles with connection lines
+
+**UI features:**
+- Dark theme with glassmorphism (backdrop-filter blur, semi-transparent backgrounds)
+- Skeleton loaders during data fetching
+- Toast notifications for success/error feedback
+- Swipe navigation between tabs (mobile)
+- Keyboard shortcuts (Cmd/Ctrl+K to focus chat, Escape to close modals)
+- Click ripple effects on send button
+- Responsive layout: sidebar on desktop, bottom tab bar on mobile
+- Status polling every 30 seconds (auto-redirect to login if session expires)
+- `prefers-reduced-motion` support disables non-essential animations
+
+---
+
+## 9. Birthday Tracker
+
+Vault includes a birthday tracking feature that stores friends' birthdays and surfaces upcoming ones on the dashboard.
+
+### Storage
+
+Birthdays are stored as facts in the `facts` table with `category = 'birthday'`:
+- `key`: Person's name (lowercase)
+- `value`: Date string (encrypted with `db_key`)
+
+### Input Methods
+
+| Method | Example | LLM Required? |
+|--------|---------|:---:|
+| Single entry (chat) | "Remember Ankit's birthday on 30th Sept" | No (regex) |
+| Structured entry | "save birthday: John, March 15" | No (regex) |
+| Bulk paste (chat) | "John - March 15, Sarah - April 2, Mike - Dec 25" | **Yes** (extraction) |
+| CSV file upload | Upload `.csv` with `name` and `birthday`/`date` columns | No (CSV parser) |
+
+### Date Parsing
+
+The date parser handles multiple formats by stripping ordinal suffixes (st, nd, rd, th) and trying both day-first and month-first orders:
+
+| Format | Example |
+|--------|---------|
+| Full month + day | "March 15", "September 30" |
+| Abbreviated month + day | "Mar 15", "Sept 30" |
+| Day + month (ordinal) | "15th March", "30th Sept" |
+| Numeric | "03/15", "03/15/1990" |
+| With year | "March 15, 1990" |
+
+### Dashboard Display
+
+- **Birthday stat card:** Shows total count of stored birthdays; label includes "(X soon)" when birthdays are within 30 days
+- **Birthday widget:** Below stat cards, lists all birthdays sorted by proximity
+  - Badges: `TODAY` (red pulse), `Tomorrow` (orange), `In X days` (blue for ≤7 days), `Xd` (neutral for others)
+  - Upcoming entries (≤7 days) highlighted with orange left border
+
+### API
+
+- `GET /api/birthdays` — Returns all birthdays with `days_until` for each, sorted by proximity
+- `GET /api/stats` — Includes `total_birthdays` and `upcoming_birthdays` (within 30 days) counts
+
+---
+
+## 10. MCP Integration
 
 Vault exposes 17 tools via the **Model Context Protocol (MCP)**, allowing external AI clients (Cursor, Claude Desktop, etc.) to interact with Vault programmatically.
 
@@ -759,7 +991,7 @@ Entry point: `vault mcp` (CLI) or `vault-mcp` (installed script).
 
 ---
 
-## 9. CLI Commands
+## 11. CLI Commands
 
 Vault includes a full command-line interface built with Typer + Rich.
 
@@ -776,14 +1008,14 @@ Vault includes a full command-line interface built with Typer + Rich.
 | `vault cred get --service <name>` | Retrieve a credential |
 | `vault cred delete --service <name>` | Delete a credential |
 | `vault facts` | List all stored facts |
-| `vault serve` | Start web UI server (default `127.0.0.1:8000`) |
+| `vault serve` | Start web UI server (default `127.0.0.1:8000`, Docker uses `0.0.0.0:8080`) |
 | `vault mcp` | Start MCP server for AI client integration |
 | `vault backup` | Create encrypted backup (optional `--output` path) |
 | `vault restore <backup_file>` | Restore from `.vbak` backup file |
 
 ---
 
-## 10. Paranoid Mode
+## 12. Paranoid Mode
 
 Paranoid mode ensures **zero network activity** — no data ever leaves your machine, not even to an LLM API.
 
@@ -806,7 +1038,7 @@ When paranoid mode is active, `llm_router._get_model_string()` always returns `"
 
 ---
 
-## 11. Backup & Recovery
+## 13. Backup & Recovery
 
 ### Encrypted Backup
 
@@ -843,7 +1075,7 @@ This is the fundamental trade-off of true zero-knowledge encryption: maximum sec
 
 ---
 
-## 12. Dependencies
+## 14. Dependencies
 
 ### Python Packages
 
@@ -881,7 +1113,7 @@ This is the fundamental trade-off of true zero-knowledge encryption: maximum sec
 
 ---
 
-## 13. Configuration Reference
+## 15. Configuration Reference
 
 Configuration file: `{vault_dir}/config.yaml`
 
@@ -920,4 +1152,4 @@ Configuration file: `{vault_dir}/config.yaml`
 
 ---
 
-*This document describes Vault as deployed. All encryption parameters, API endpoints, and architectural decisions are reflected in the codebase at the time of writing.*
+*This document describes Vault as deployed. All encryption parameters, API endpoints, and architectural decisions are reflected in the codebase at the time of writing. Last updated: March 2026.*

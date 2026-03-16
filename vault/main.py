@@ -10,6 +10,7 @@ import base64
 import json
 import logging
 import os
+import secrets
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -295,11 +296,55 @@ async def api_status(request: Request):
     }
 
 
+@app.post("/api/upload-preview")
+async def api_upload_preview(
+    request: Request,
+    file: UploadFile = File(...),
+):
+    """Extract metadata and suggest a name without storing anything."""
+    _require_session(request)
+    if not agent:
+        raise HTTPException(500, "Agent not initialized")
+
+    file_data = await file.read()
+    file_name = file.filename or "unknown"
+
+    from vault.processors.document import extract_text, guess_category, extract_document_metadata
+
+    extracted = extract_text(file_data, file_name)
+    category = guess_category(file_name, extracted)
+    regex_meta = extract_document_metadata(file_name, extracted, category) if extracted else {}
+
+    llm_meta: dict = {}
+    if extracted:
+        try:
+            llm_meta = await agent.llm.extract_document_metadata(file_name, category, extracted)
+        except Exception:
+            pass
+
+    merged = {**regex_meta, **{k: v for k, v in llm_meta.items() if v}}
+
+    suggested_name = merged.get("suggested_name") or file_name
+    if suggested_name == file_name and merged.get("summary"):
+        suggested_name = merged["summary"][:60]
+
+    return {
+        "suggested_name": suggested_name,
+        "category": category,
+        "sub_category": merged.get("sub_category"),
+        "doctor": merged.get("doctor"),
+        "doc_date": merged.get("doc_date"),
+        "summary": merged.get("summary"),
+        "has_text": bool(extracted),
+    }
+
+
 @app.post("/api/chat")
 async def api_chat(
     request: Request,
     message: str = Form(""),
     file: Optional[UploadFile] = File(None),
+    force: bool = Form(False),
 ):
     if not agent:
         raise HTTPException(500, "Agent not initialized")
@@ -314,8 +359,11 @@ async def api_chat(
     old_session = agent.session
     agent.session = s
     try:
-        response = await agent.process(message, file_data=file_data, file_name=file_name)
+        response = await agent.process(message, file_data=file_data, file_name=file_name, force=force)
         result: dict[str, Any] = {"text": response.text}
+        if response.data and response.data.get("duplicate_warning"):
+            result["duplicate_warning"] = True
+            result["existing_name"] = response.data.get("existing_name")
         if response.file_data and response.file_name:
             result["file"] = {
                 "name": response.file_name,
@@ -525,6 +573,54 @@ async def api_db_viewer_table(request: Request, table: str):
     return {"rows": []}
 
 
+# ===== Expiry Alerts =====
+
+@app.get("/api/expiry-alerts")
+async def api_expiry_alerts(request: Request):
+    s = _require_session(request)
+    if not agent or not agent.db._conn:
+        raise HTTPException(500, "Database not available")
+
+    from datetime import datetime, timedelta
+
+    keys = s.keys
+    docs = agent.db.list_documents(keys.db_key)
+    alerts = []
+    today = datetime.now().date()
+    threshold = today + timedelta(days=90)
+
+    for doc in docs:
+        tags = doc.get("tags", [])
+        if isinstance(tags, str):
+            import json as _json
+            try:
+                tags = _json.loads(tags)
+            except Exception:
+                tags = []
+        for tag in tags:
+            if tag.startswith("expiry:"):
+                date_str = tag[7:]
+                try:
+                    expiry = datetime.strptime(date_str, "%Y-%m-%d").date()
+                except ValueError:
+                    continue
+                days_until = (expiry - today).days
+                if days_until <= 90:
+                    status = "expired" if days_until < 0 else "expiring_soon"
+                    alerts.append({
+                        "doc_id": doc["id"],
+                        "name": doc["name"],
+                        "category": doc.get("category", "general"),
+                        "expiry_date": date_str,
+                        "days_until": days_until,
+                        "status": status,
+                    })
+                break
+
+    alerts.sort(key=lambda a: a["days_until"])
+    return {"alerts": alerts}
+
+
 # ===== Stats endpoint for dashboard =====
 
 @app.get("/api/stats")
@@ -553,6 +649,31 @@ async def api_stats(request: Request):
                 if (this_year - today).days <= 30:
                     upcoming += 1
 
+    expiring_count = 0
+    try:
+        from datetime import timedelta
+        exp_docs = agent.db.list_documents(s.keys.db_key)
+        exp_today = today.date() if hasattr(today, 'date') else today
+        for d in exp_docs:
+            dtags = d.get("tags", [])
+            if isinstance(dtags, str):
+                import json as _json
+                try:
+                    dtags = _json.loads(dtags)
+                except Exception:
+                    dtags = []
+            for t in dtags:
+                if t.startswith("expiry:"):
+                    try:
+                        exp = datetime.strptime(t[7:], "%Y-%m-%d").date()
+                        if (exp - exp_today).days <= 90:
+                            expiring_count += 1
+                    except ValueError:
+                        pass
+                    break
+    except Exception:
+        pass
+
     return {
         "documents": doc_count,
         "credentials": cred_count,
@@ -560,6 +681,7 @@ async def api_stats(request: Request):
         "active_sessions": session_store.active_count(),
         "total_birthdays": birthday_count,
         "upcoming_birthdays": upcoming,
+        "expiring_soon": expiring_count,
     }
 
 
@@ -602,6 +724,187 @@ async def api_list_facts(request: Request):
         "key": f["key"], "value": f["value"],
         "created_at": f.get("created_at"),
     } for f in facts]}
+
+
+@app.get("/api/reminders")
+async def api_list_reminders(request: Request):
+    s = _require_session(request)
+    if not agent or not agent.db._conn:
+        raise HTTPException(500, "Database not available")
+    reminders = agent.db.list_reminders(s.keys.db_key)
+    from datetime import datetime as _dt
+    today = _dt.now().date()
+    result = []
+    for r in reminders:
+        try:
+            due = _dt.strptime(r["due_date"], "%Y-%m-%d").date()
+            days_until = (due - today).days
+        except ValueError:
+            days_until = None
+        result.append({
+            "id": r["id"],
+            "title": r["title"],
+            "due_date": r["due_date"],
+            "repeat_interval": r.get("repeat_interval"),
+            "status": r["status"],
+            "days_until": days_until,
+            "created_at": r.get("created_at"),
+        })
+    return {"reminders": result}
+
+
+@app.post("/api/reminders")
+async def api_create_reminder(request: Request):
+    s = _require_session(request)
+    if not agent or not agent.db._conn:
+        raise HTTPException(500, "Database not available")
+    body = await request.json()
+    title = body.get("title", "")
+    due_date = body.get("due_date", "")
+    if not title or not due_date:
+        raise HTTPException(400, "title and due_date are required")
+    rem_id = agent.db.store_reminder(
+        title=title,
+        due_date=due_date,
+        encryption_key=s.keys.db_key,
+        repeat_interval=body.get("repeat_interval"),
+    )
+    return {"id": rem_id, "status": "created"}
+
+
+@app.delete("/api/reminders/{rem_id}")
+async def api_delete_reminder(request: Request, rem_id: str):
+    s = _require_session(request)
+    if not agent or not agent.db._conn:
+        raise HTTPException(500, "Database not available")
+    if agent.db.delete_reminder(rem_id):
+        return {"status": "deleted"}
+    raise HTTPException(404, "Reminder not found")
+
+
+@app.post("/api/reminders/{rem_id}/complete")
+async def api_complete_reminder(request: Request, rem_id: str):
+    s = _require_session(request)
+    if not agent or not agent.db._conn:
+        raise HTTPException(500, "Database not available")
+    if agent.db.complete_reminder(rem_id):
+        return {"status": "completed"}
+    raise HTTPException(404, "Reminder not found")
+
+
+# ===== Document Sharing =====
+
+_share_tokens: dict[str, dict] = {}
+SHARE_TOKEN_TTL = 600  # 10 minutes
+
+
+def _cleanup_expired_tokens() -> None:
+    now = time.time()
+    expired = [t for t, d in _share_tokens.items() if now - d["created_at"] > SHARE_TOKEN_TTL]
+    for t in expired:
+        del _share_tokens[t]
+
+
+@app.post("/api/share/create")
+async def api_share_create(request: Request):
+    """Create a temporary share link for a document."""
+    s = _require_session(request)
+    if not agent or not agent.db._conn:
+        raise HTTPException(500, "Database not available")
+
+    body = await request.json()
+    doc_id = body.get("doc_id", "")
+    if not doc_id:
+        raise HTTPException(400, "doc_id required")
+
+    doc = agent.db.get_document(doc_id, s.keys.db_key)
+    if not doc:
+        raise HTTPException(404, "Document not found")
+    if not doc.get("file_ref"):
+        raise HTTPException(400, "Document has no file attached")
+
+    file_data, original_name = agent.file_vault.retrieve(doc["file_ref"], s.keys.file_key)
+
+    _cleanup_expired_tokens()
+    token = secrets.token_urlsafe(32)
+    _share_tokens[token] = {
+        "file_data": file_data,
+        "file_name": original_name,
+        "doc_name": doc["name"],
+        "created_at": time.time(),
+    }
+
+    base_url = str(request.base_url).rstrip("/")
+    share_url = f"{base_url}/api/share/{token}"
+    return {"share_url": share_url, "token": token, "expires_in": SHARE_TOKEN_TTL}
+
+
+@app.get("/api/share/{token}")
+async def api_share_download(token: str):
+    """Download a shared document via temporary token."""
+    _cleanup_expired_tokens()
+    entry = _share_tokens.get(token)
+    if not entry:
+        raise HTTPException(404, "Share link expired or invalid")
+
+    return Response(
+        content=entry["file_data"],
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{entry["file_name"]}"'},
+    )
+
+
+@app.post("/api/share/email")
+async def api_share_email(request: Request):
+    """Send a document as email attachment via SMTP."""
+    s = _require_session(request)
+    if not agent or not agent.db._conn:
+        raise HTTPException(500, "Database not available")
+
+    cfg = agent.config
+    if not cfg.smtp_host or not cfg.smtp_user:
+        raise HTTPException(400, "SMTP not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASSWORD, SMTP_FROM environment variables.")
+
+    body = await request.json()
+    doc_id = body.get("doc_id", "")
+    to_email = body.get("to_email", "")
+    if not doc_id or not to_email:
+        raise HTTPException(400, "doc_id and to_email are required")
+
+    doc = agent.db.get_document(doc_id, s.keys.db_key)
+    if not doc:
+        raise HTTPException(404, "Document not found")
+    if not doc.get("file_ref"):
+        raise HTTPException(400, "Document has no file attached")
+
+    file_data, original_name = agent.file_vault.retrieve(doc["file_ref"], s.keys.file_key)
+
+    import smtplib
+    from email.mime.application import MIMEApplication
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    msg = MIMEMultipart()
+    msg["Subject"] = f"Shared from Vault: {doc['name']}"
+    msg["From"] = cfg.smtp_from or cfg.smtp_user
+    msg["To"] = to_email
+
+    msg.attach(MIMEText(f"Document \"{doc['name']}\" has been shared with you from Vault.", "plain"))
+
+    attachment = MIMEApplication(file_data, Name=original_name)
+    attachment["Content-Disposition"] = f'attachment; filename="{original_name}"'
+    msg.attach(attachment)
+
+    try:
+        with smtplib.SMTP(cfg.smtp_host, cfg.smtp_port) as smtp:
+            smtp.ehlo()
+            smtp.starttls()
+            smtp.login(cfg.smtp_user, cfg.smtp_password)
+            smtp.sendmail(msg["From"], [to_email], msg.as_string())
+        return {"status": "sent", "to": to_email}
+    except Exception as e:
+        logger.error("SMTP error: %s", e)
+        raise HTTPException(500, f"Failed to send email: {str(e)}")
 
 
 @app.delete("/api/documents/{doc_id}")

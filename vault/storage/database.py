@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS documents (
     file_ref TEXT,
     extracted_text BLOB,
     tags TEXT DEFAULT '[]',
+    content_hash TEXT,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
@@ -57,11 +58,24 @@ CREATE TABLE IF NOT EXISTS facts (
     updated_at REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS reminders (
+    id TEXT PRIMARY KEY,
+    title BLOB NOT NULL,
+    due_date TEXT NOT NULL,
+    repeat_interval TEXT,
+    source_doc_id TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_documents_category ON documents(category);
 CREATE INDEX IF NOT EXISTS idx_documents_name ON documents(name);
 CREATE INDEX IF NOT EXISTS idx_credentials_service ON credentials(service);
 CREATE INDEX IF NOT EXISTS idx_facts_category ON facts(category);
 CREATE INDEX IF NOT EXISTS idx_facts_key ON facts(key);
+CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(due_date);
+CREATE INDEX IF NOT EXISTS idx_reminders_status ON reminders(status);
 """
 
 
@@ -84,6 +98,7 @@ class VaultDatabase:
             "SELECT name FROM sqlite_master WHERE type='table' AND name='meta'"
         ).fetchone()
         if row:
+            self._migrate()
             return
         self._conn.executescript(SCHEMA_SQL)
         self._conn.execute(
@@ -91,6 +106,31 @@ class VaultDatabase:
             ("schema_version", str(SCHEMA_VERSION)),
         )
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(documents)").fetchall()}
+        if "content_hash" not in cols:
+            self._conn.execute("ALTER TABLE documents ADD COLUMN content_hash TEXT")
+            self._conn.commit()
+
+        tables = {r[0] for r in self._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+        if "reminders" not in tables:
+            self._conn.executescript("""
+                CREATE TABLE IF NOT EXISTS reminders (
+                    id TEXT PRIMARY KEY,
+                    title BLOB NOT NULL,
+                    due_date TEXT NOT NULL,
+                    repeat_interval TEXT,
+                    source_doc_id TEXT,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(due_date);
+                CREATE INDEX IF NOT EXISTS idx_reminders_status ON reminders(status);
+            """)
 
     def close(self) -> None:
         if self._conn:
@@ -119,17 +159,27 @@ class VaultDatabase:
         file_ref: Optional[str] = None,
         extracted_text: Optional[str] = None,
         tags: Optional[list[str]] = None,
+        content_hash: Optional[str] = None,
     ) -> str:
         doc_id = str(uuid.uuid4())
         now = time.time()
         enc_text = encrypt(extracted_text.encode("utf-8"), encryption_key) if extracted_text else None
         with self.transaction() as cur:
             cur.execute(
-                """INSERT INTO documents (id, name, category, file_ref, extracted_text, tags, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (doc_id, name, category, file_ref, enc_text, json.dumps(tags or []), now, now),
+                """INSERT INTO documents (id, name, category, file_ref, extracted_text, tags, content_hash, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (doc_id, name, category, file_ref, enc_text, json.dumps(tags or []), content_hash, now, now),
             )
         return doc_id
+
+    def find_by_content_hash(self, content_hash: str) -> Optional[dict[str, Any]]:
+        if self._conn is None:
+            raise RuntimeError("Database not open")
+        row = self._conn.execute(
+            "SELECT id, name, category FROM documents WHERE content_hash = ?",
+            (content_hash,),
+        ).fetchone()
+        return dict(row) if row else None
 
     def get_document(self, doc_id: str, encryption_key: bytes) -> Optional[dict[str, Any]]:
         if self._conn is None:
@@ -381,6 +431,63 @@ class VaultDatabase:
             "key": row["key"],
             "value": decrypt(row["value"], key).decode("utf-8"),
             "source": row["source"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    # --- Reminders ---
+
+    def store_reminder(
+        self,
+        title: str,
+        due_date: str,
+        encryption_key: bytes,
+        repeat_interval: Optional[str] = None,
+        source_doc_id: Optional[str] = None,
+    ) -> str:
+        rem_id = str(uuid.uuid4())
+        now = time.time()
+        enc_title = encrypt(title.encode("utf-8"), encryption_key)
+        with self.transaction() as cur:
+            cur.execute(
+                """INSERT INTO reminders (id, title, due_date, repeat_interval, source_doc_id, status, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, 'active', ?, ?)""",
+                (rem_id, enc_title, due_date, repeat_interval, source_doc_id, now, now),
+            )
+        return rem_id
+
+    def list_reminders(self, encryption_key: bytes, status: Optional[str] = "active") -> list[dict[str, Any]]:
+        if self._conn is None:
+            raise RuntimeError("Database not open")
+        if status:
+            rows = self._conn.execute(
+                "SELECT * FROM reminders WHERE status = ? ORDER BY due_date", (status,)
+            ).fetchall()
+        else:
+            rows = self._conn.execute("SELECT * FROM reminders ORDER BY due_date").fetchall()
+        return [self._decrypt_reminder_row(r, encryption_key) for r in rows]
+
+    def delete_reminder(self, rem_id: str) -> bool:
+        with self.transaction() as cur:
+            cur.execute("DELETE FROM reminders WHERE id = ?", (rem_id,))
+            return cur.rowcount > 0
+
+    def complete_reminder(self, rem_id: str) -> bool:
+        with self.transaction() as cur:
+            cur.execute(
+                "UPDATE reminders SET status = 'completed', updated_at = ? WHERE id = ?",
+                (time.time(), rem_id),
+            )
+            return cur.rowcount > 0
+
+    def _decrypt_reminder_row(self, row: sqlite3.Row, key: bytes) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "title": decrypt(row["title"], key).decode("utf-8"),
+            "due_date": row["due_date"],
+            "repeat_interval": row["repeat_interval"],
+            "source_doc_id": row["source_doc_id"],
+            "status": row["status"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }

@@ -11,6 +11,7 @@ Routes user queries to the right handler:
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import logging
 import re
@@ -64,7 +65,7 @@ class VaultAgent:
         self.db.close()
         self.session.lock()
 
-    async def process(self, message: str, file_data: Optional[bytes] = None, file_name: Optional[str] = None) -> AgentResponse:
+    async def process(self, message: str, file_data: Optional[bytes] = None, file_name: Optional[str] = None, force: bool = False) -> AgentResponse:
         """Main entry point — process a user message and return a response."""
         if self.session.is_locked:
             return AgentResponse(text="Vault is locked. Please unlock with your master password first.")
@@ -74,7 +75,7 @@ class VaultAgent:
         if file_data and file_name:
             if file_name.lower().endswith(".csv") and self._looks_like_birthday_file(file_data):
                 return self._handle_birthday_csv(file_data, keys)
-            return await self._handle_store_document(message, file_data, file_name, keys)
+            return await self._handle_store_document(message, file_data, file_name, keys, force=force)
 
         local_result = self._try_local_resolution(message, keys)
         if local_result:
@@ -96,6 +97,8 @@ class VaultAgent:
             "store_document": self._handle_store_document_prompt,
             "list_items": self._handle_list_items,
             "delete_item": self._handle_delete_item,
+            "set_reminder": self._handle_set_reminder,
+            "list_reminders": self._handle_list_reminders,
         }
 
         handler = handlers.get(intent_type)
@@ -219,6 +222,13 @@ class VaultAgent:
             if re.match(dp, lower):
                 return None  # fall through to LLM intent detection -> _handle_delete_item
 
+        reminder_triggers = ["remind me", "set reminder", "create reminder", "add reminder", "follow up", "followup"]
+        if any(t in lower for t in reminder_triggers):
+            return None  # fall through to LLM -> set_reminder
+
+        if lower in ("list reminders", "show reminders", "my reminders", "show my reminders", "reminders", "upcoming reminders"):
+            return None  # fall through to LLM -> list_reminders
+
         if lower in ("lock", "lock vault", "lock the vault"):
             self.session.lock()
             return AgentResponse(text="Vault locked. Stay safe!")
@@ -231,13 +241,24 @@ class VaultAgent:
         file_data: bytes,
         file_name: str,
         keys: Any,
+        force: bool = False,
     ) -> AgentResponse:
+        content_hash = hashlib.sha256(file_data).hexdigest()
+
+        if not force:
+            existing = self.db.find_by_content_hash(content_hash)
+            if existing:
+                return AgentResponse(
+                    text=f"This file is already stored as **{existing['name']}**. Upload again anyway?",
+                    data={"duplicate_warning": True, "existing_name": existing["name"]},
+                )
+
         file_ref = self.file_vault.store(file_data, keys.file_key, file_name)
 
         extracted = extract_text(file_data, file_name)
         category = guess_category(file_name, extracted)
 
-        name = message.strip() if message.strip() and message.strip().lower() not in ("", "store", "upload") else file_name
+        user_name = message.strip() if message.strip() and message.strip().lower() not in ("", "store", "upload") else ""
 
         tags = [category, file_name.split(".")[-1]]
         regex_meta = extract_document_metadata(file_name, extracted, category) if extracted else {}
@@ -245,11 +266,13 @@ class VaultAgent:
         llm_meta: dict = {}
         if extracted:
             try:
-                llm_meta = await self.llm.extract_document_metadata(name, category, extracted)
+                llm_meta = await self.llm.extract_document_metadata(user_name or file_name, category, extracted)
             except Exception as e:
                 logger.warning("LLM metadata extraction failed: %s", e)
 
         merged_meta = {**regex_meta, **{k: v for k, v in llm_meta.items() if v}}
+
+        name = user_name or merged_meta.get("suggested_name") or file_name
 
         if merged_meta.get("sub_category"):
             tags.append(f"sub:{merged_meta['sub_category']}")
@@ -257,6 +280,8 @@ class VaultAgent:
             tags.append(f"doctor:{merged_meta['doctor']}")
         if merged_meta.get("doc_date"):
             tags.append(f"date:{merged_meta['doc_date']}")
+        if merged_meta.get("expiry_date"):
+            tags.append(f"expiry:{merged_meta['expiry_date']}")
         if merged_meta.get("summary"):
             tags.append(f"summary:{merged_meta['summary']}")
         for kw in merged_meta.get("keywords", []):
@@ -270,6 +295,18 @@ class VaultAgent:
         if merged_meta.get("doc_date"):
             vector_meta["doc_date"] = merged_meta["doc_date"]
 
+        if not force and extracted:
+            try:
+                similar = self.vector_store.search(extracted[:500], n_results=1)
+                if similar and similar[0].get("distance", 1.0) < 0.08:
+                    sim_name = similar[0].get("metadata", {}).get("name", "unknown")
+                    return AgentResponse(
+                        text=f"This looks very similar to **{sim_name}**. Upload anyway?",
+                        data={"duplicate_warning": True, "existing_name": sim_name},
+                    )
+            except Exception:
+                pass
+
         doc_id = self.db.store_document(
             name=name,
             category=category,
@@ -277,6 +314,7 @@ class VaultAgent:
             file_ref=file_ref,
             extracted_text=extracted or None,
             tags=tags,
+            content_hash=content_hash,
         )
 
         if extracted:
@@ -691,6 +729,119 @@ class VaultAgent:
                  "  - \"forget my blood type fact\"\n\n"
                  "You can also delete items directly from the Documents, Credentials, or Memory views."
         )
+
+    async def _handle_set_reminder(self, message: str, entities: dict, keys: Any) -> AgentResponse:
+        lower = message.lower()
+
+        patterns = [
+            r"remind\s+me\s+(?:to\s+)?(.+?)\s+(?:in|after)\s+(\d+)\s+(day|week|month)s?",
+            r"remind\s+me\s+(?:to\s+)?(.+?)\s+(?:on|by)\s+(.+?)$",
+            r"(?:set|create|add)\s+(?:a\s+)?reminder\s*:?\s*(.+?)\s+(?:on|by|for)\s+(.+?)$",
+            r"(?:set|create|add)\s+(?:a\s+)?reminder\s*:?\s*(.+?)\s+(?:in|after)\s+(\d+)\s+(day|week|month)s?",
+            r"follow\s*up\s+(?:on\s+)?(.+?)\s+(?:on|by)\s+(.+?)$",
+            r"follow\s*up\s+(?:on\s+)?(.+?)\s+(?:in|after)\s+(\d+)\s+(day|week|month)s?",
+        ]
+
+        title = None
+        due_date = None
+        from datetime import timedelta
+
+        for pat in patterns:
+            m = re.search(pat, lower)
+            if not m:
+                continue
+            groups = m.groups()
+
+            if len(groups) == 3 and groups[2] in ("day", "week", "month"):
+                title = groups[0].strip()
+                n = int(groups[1])
+                unit = groups[2]
+                now = datetime.now()
+                if unit == "day":
+                    due = now + timedelta(days=n)
+                elif unit == "week":
+                    due = now + timedelta(weeks=n)
+                else:
+                    due = now + timedelta(days=n * 30)
+                due_date = due.strftime("%Y-%m-%d")
+                break
+            elif len(groups) == 2:
+                title = groups[0].strip()
+                date_str = groups[1].strip().rstrip(".!,")
+                parsed = self._parse_reminder_date(date_str)
+                if parsed:
+                    due_date = parsed.strftime("%Y-%m-%d")
+                else:
+                    due_date = date_str
+                break
+
+        if not title:
+            cleaned = re.sub(r"^(?:remind\s+me\s+(?:to\s+)?|set\s+(?:a\s+)?reminder\s*:?\s*|create\s+(?:a\s+)?reminder\s*:?\s*)", "", lower).strip()
+            title = cleaned or message.strip()
+            due_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+
+        rem_id = self.db.store_reminder(
+            title=title.capitalize(),
+            due_date=due_date,
+            encryption_key=keys.db_key,
+        )
+
+        return AgentResponse(
+            text=f"Reminder set: **{title.capitalize()}** — due {due_date}",
+            data={"reminder_id": rem_id},
+        )
+
+    def _parse_reminder_date(self, date_str: str) -> Optional[datetime]:
+        from datetime import timedelta
+        lower = date_str.lower().strip()
+
+        if lower == "tomorrow":
+            return datetime.now() + timedelta(days=1)
+        if lower == "today":
+            return datetime.now()
+        if lower.startswith("next week"):
+            return datetime.now() + timedelta(weeks=1)
+        if lower.startswith("next month"):
+            return datetime.now() + timedelta(days=30)
+
+        cleaned = re.sub(r"(\d+)(st|nd|rd|th)", r"\1", lower)
+        for fmt in ("%B %d, %Y", "%B %d %Y", "%b %d, %Y", "%b %d %Y",
+                     "%B %d", "%b %d", "%d %B %Y", "%d %b %Y", "%d %B", "%d %b",
+                     "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y"):
+            try:
+                parsed = datetime.strptime(cleaned, fmt)
+                if parsed.year == 1900:
+                    parsed = parsed.replace(year=datetime.now().year)
+                    if parsed < datetime.now():
+                        parsed = parsed.replace(year=parsed.year + 1)
+                return parsed
+            except ValueError:
+                continue
+        return None
+
+    async def _handle_list_reminders(self, message: str, entities: dict, keys: Any) -> AgentResponse:
+        reminders = self.db.list_reminders(keys.db_key)
+        if not reminders:
+            return AgentResponse(text="You have no active reminders. Say something like \"remind me to renew passport in 30 days\" to create one.")
+
+        today = datetime.now().date()
+        lines = ["**Your Reminders:**\n"]
+        for r in reminders:
+            try:
+                due = datetime.strptime(r["due_date"], "%Y-%m-%d").date()
+                diff = (due - today).days
+                if diff < 0:
+                    badge = f"⚠ overdue by {abs(diff)}d"
+                elif diff == 0:
+                    badge = "📌 due today"
+                elif diff <= 7:
+                    badge = f"🔔 in {diff}d"
+                else:
+                    badge = f"in {diff}d"
+            except ValueError:
+                badge = r["due_date"]
+            lines.append(f"- **{r['title']}** — {badge}")
+        return AgentResponse(text="\n".join(lines))
 
     async def _try_document_answer(self, message: str, keys: Any) -> Optional[AgentResponse]:
         """Try to answer a question from stored documents. Returns None if no docs help."""

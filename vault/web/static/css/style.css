@@ -809,6 +809,12 @@ button:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important;
     margin-top: 0.15rem;
 }
 
+.stat-card-birthday {
+    cursor: pointer;
+}
+.stat-card-birthday:hover {
+    border-color: #ff9843;
+}
 .stat-card-birthday .stat-icon {
     background: rgba(255, 152, 67, 0.12);
     color: #ff9843;
@@ -845,6 +851,33 @@ button:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important;
 }
 
 .birthday-widget-header h3 svg { color: #ff9843; }
+
+.widget-close-btn {
+    background: none;
+    border: none;
+    color: var(--text-3);
+    cursor: pointer;
+    padding: 0.3rem;
+    border-radius: 6px;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.widget-close-btn:hover {
+    color: var(--text-1);
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.birthday-widget.collapsing {
+    animation: collapseOut 0.3s ease forwards;
+}
+
+@keyframes collapseOut {
+    from { opacity: 1; max-height: 400px; margin-bottom: 0.75rem; }
+    to { opacity: 0; max-height: 0; margin-bottom: 0; padding: 0; border-width: 0; }
+}
 
 .birthday-list {
     display: flex;
@@ -929,11 +962,11 @@ button:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important;
 
 .view.active {
     display: flex;
-    animation: viewIn 0.35s var(--ease-spring);
+    animation: viewIn 0.3s ease both;
 }
 
 @keyframes viewIn {
-    from { opacity: 0; transform: translateY(6px); }
+    from { opacity: 0; transform: translateY(8px); }
     to { opacity: 1; transform: translateY(0); }
 }
 
@@ -1773,9 +1806,6 @@ button:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important;
 }
 
 .item-card .delete-btn {
-    position: absolute;
-    top: 0.5rem;
-    right: 0.5rem;
     z-index: 2;
 }
 
@@ -1882,9 +1912,298 @@ button:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important;
 .btn-danger:disabled { opacity: 0.6; cursor: not-allowed; }
 
 @media (max-width: 768px) {
-    .delete-btn { opacity: 0.6; }
-    .item-card .delete-btn { opacity: 0.6; }
+    .delete-btn { opacity: 0.7; background: rgba(255, 255, 255, 0.04); }
+    .item-card .delete-btn { opacity: 0.7; }
+    .share-btn { opacity: 0.7; }
+    .reminder-delete-btn { opacity: 0.7; }
 }
+
+/* ===== Reminders Widget ===== */
+.reminders-widget {
+    margin: 0 1.5rem 0.75rem;
+    background: var(--glass);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--r-lg);
+    overflow: hidden;
+    animation: msgIn 0.5s var(--ease-spring) 0.3s both;
+}
+
+.reminders-widget-header {
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--glass-border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.reminders-widget-header h3 {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-2);
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0;
+}
+
+.reminders-widget-header h3 svg { color: #638dff; }
+
+.reminders-list { padding: 0.5rem; }
+
+.reminder-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.45rem 0.6rem;
+    border-radius: var(--r-sm);
+    transition: background 0.2s ease;
+}
+
+.reminder-item:hover { background: rgba(255, 255, 255, 0.03); }
+
+.reminder-actions { flex-shrink: 0; }
+
+.reminder-done-btn {
+    background: none;
+    border: 1px solid var(--glass-border);
+    border-radius: 50%;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--text-3);
+    transition: all 0.2s;
+    padding: 0;
+}
+
+.reminder-done-btn:hover { border-color: var(--success); color: var(--success); background: rgba(61, 214, 140, 0.1); }
+
+.reminder-info { flex: 1; min-width: 0; }
+.reminder-title { font-size: 0.82rem; font-weight: 500; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.reminder-due { font-size: 0.7rem; color: var(--text-3); }
+
+.reminder-badge {
+    font-size: 0.65rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-3);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.reminder-overdue { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+.reminder-today { background: rgba(99, 141, 255, 0.2); color: #638dff; font-weight: 700; }
+.reminder-soon { background: rgba(255, 152, 67, 0.15); color: #ff9843; }
+.reminder-urgent { border-left: 2px solid #638dff; }
+.reminder-overdue-row { border-left: 2px solid #ef4444; }
+
+.reminder-delete-btn {
+    background: none;
+    border: none;
+    color: var(--text-3);
+    cursor: pointer;
+    padding: 0.2rem;
+    border-radius: 4px;
+    transition: all 0.2s;
+    opacity: 0;
+    flex-shrink: 0;
+}
+
+.reminder-item:hover .reminder-delete-btn { opacity: 1; }
+.reminder-delete-btn:hover { color: #ef4444; background: rgba(239, 68, 68, 0.1); }
+
+/* ===== Expiry Alerts Widget ===== */
+.expiry-widget {
+    margin: 0 1.5rem 0.75rem;
+    background: var(--glass);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--r-lg);
+    overflow: hidden;
+    animation: msgIn 0.5s var(--ease-spring) 0.3s both;
+}
+
+.expiry-widget-header {
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--glass-border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.expiry-widget-header h3 {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-2);
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0;
+}
+
+.expiry-widget-header h3 svg { color: #ef4444; }
+
+.expiry-list { padding: 0.5rem; }
+
+.expiry-item {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.55rem 0.75rem;
+    border-radius: var(--r-sm);
+    transition: background 0.2s ease;
+}
+
+.expiry-item:hover { background: rgba(255, 255, 255, 0.03); }
+
+.expiry-icon { font-size: 1.1rem; }
+.expiry-info { flex: 1; min-width: 0; }
+.expiry-name { font-size: 0.82rem; font-weight: 500; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.expiry-date { font-size: 0.7rem; color: var(--text-3); }
+
+.expiry-badge {
+    font-size: 0.65rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-3);
+    white-space: nowrap;
+}
+
+.expiry-expired { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+.expiry-today { background: rgba(239, 68, 68, 0.2); color: #ef4444; font-weight: 700; }
+.expiry-soon { background: rgba(255, 152, 67, 0.15); color: #ff9843; }
+.expiry-urgent { border-left: 2px solid #ef4444; }
+.expiry-expired-row { border-left: 2px solid #ef4444; opacity: 0.8; }
+
+/* ===== Upload Preview Modal ===== */
+.upload-preview-card {
+    max-width: 440px;
+}
+
+.upload-preview-loading {
+    text-align: center;
+    padding: 1.5rem 0;
+    color: var(--text-3);
+    font-size: 0.85rem;
+}
+
+.upload-preview-loading p { margin-top: 0.75rem; }
+
+.preview-meta-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-bottom: 0.75rem;
+}
+
+.meta-chip {
+    display: inline-block;
+    font-size: 0.65rem;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+    background: rgba(201, 168, 76, 0.12);
+    color: var(--accent);
+}
+
+.chip-sub { background: rgba(61, 214, 140, 0.12); color: var(--success); }
+.chip-doctor { background: rgba(99, 141, 255, 0.12); color: #638dff; }
+.chip-date { background: rgba(255, 152, 67, 0.12); color: #ff9843; }
+
+.preview-summary {
+    font-size: 0.8rem;
+    color: var(--text-3);
+    margin-top: 0.5rem;
+    line-height: 1.4;
+}
+
+/* ===== Share Modal ===== */
+.share-modal-card {
+    max-width: 380px;
+}
+
+.share-doc-name {
+    font-size: 0.85rem;
+    color: var(--text-2);
+    margin-bottom: 1rem;
+    font-weight: 500;
+}
+
+.share-options {
+    display: flex;
+    gap: 0.6rem;
+    margin-bottom: 1rem;
+}
+
+.share-option-btn {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.8rem 0.5rem;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--r-sm);
+    background: var(--glass);
+    color: var(--text-2);
+    cursor: pointer;
+    font-size: 0.72rem;
+    font-weight: 600;
+    transition: all 0.2s ease;
+    font-family: var(--font-body);
+}
+
+.share-option-btn:hover { border-color: var(--accent); color: var(--text-1); background: rgba(201, 168, 76, 0.06); }
+.share-wa:hover { border-color: #25d366; color: #25d366; }
+.share-wa svg { color: #25d366; }
+.share-em:hover { border-color: #638dff; color: #638dff; }
+.share-em svg { color: #638dff; }
+
+.share-email-form {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+
+.share-email-form input {
+    flex: 1;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--r-sm);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-1);
+    font-family: var(--font-body);
+    font-size: 0.82rem;
+}
+
+.share-email-form input:focus { border-color: var(--accent); outline: none; }
+
+.card-actions {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    display: flex;
+    gap: 0.25rem;
+}
+
+.share-btn {
+    background: none;
+    border: none;
+    color: var(--text-3);
+    cursor: pointer;
+    padding: 0.35rem;
+    border-radius: 6px;
+    transition: all 0.2s ease;
+    opacity: 0;
+}
+
+.item-card:hover .share-btn { opacity: 1; }
+.share-btn:hover { color: var(--accent); background: rgba(201, 168, 76, 0.1); }
 
 /* ===== Reindex Button ===== */
 .reindex-btn {

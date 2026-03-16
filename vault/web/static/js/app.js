@@ -62,11 +62,180 @@
 
     loadStats();
     loadBirthdays();
+    loadExpiryAlerts();
+    loadReminders();
+
+    function isExpiryDismissedToday() {
+        const dismissed = localStorage.getItem('expiry_widget_closed');
+        if (!dismissed) return false;
+        return dismissed === new Date().toISOString().slice(0, 10);
+    }
+
+    const expiryCloseBtn = $('#expiry-close');
+    if (expiryCloseBtn) expiryCloseBtn.addEventListener('click', () => {
+        const widget = $('#expiry-widget');
+        if (widget) {
+            widget.classList.add('collapsing');
+            setTimeout(() => { widget.style.display = 'none'; widget.classList.remove('collapsing'); }, 300);
+        }
+        localStorage.setItem('expiry_widget_closed', new Date().toISOString().slice(0, 10));
+    });
+
+    async function loadExpiryAlerts() {
+        const widget = $('#expiry-widget');
+        const list = $('#expiry-list');
+        if (!widget || !list) return;
+        if (isExpiryDismissedToday()) { widget.style.display = 'none'; return; }
+        try {
+            const resp = await fetch('/api/expiry-alerts');
+            if (!resp.ok) return;
+            const data = await resp.json();
+            const alerts = data.alerts || [];
+            if (alerts.length === 0) { widget.style.display = 'none'; return; }
+
+            widget.style.display = '';
+            list.innerHTML = '';
+            alerts.forEach(a => {
+                const item = document.createElement('div');
+                item.className = 'expiry-item';
+                let badge;
+                if (a.days_until < 0) {
+                    badge = `<span class="expiry-badge expiry-expired">Expired ${Math.abs(a.days_until)}d ago</span>`;
+                    item.classList.add('expiry-expired-row');
+                } else if (a.days_until === 0) {
+                    badge = '<span class="expiry-badge expiry-today">Today!</span>';
+                    item.classList.add('expiry-urgent');
+                } else if (a.days_until <= 30) {
+                    badge = `<span class="expiry-badge expiry-soon">${a.days_until}d left</span>`;
+                    item.classList.add('expiry-urgent');
+                } else {
+                    badge = `<span class="expiry-badge">${a.days_until}d</span>`;
+                }
+                item.innerHTML = `
+                    <div class="expiry-icon">${a.days_until < 0 ? '&#9888;' : '&#128196;'}</div>
+                    <div class="expiry-info">
+                        <div class="expiry-name">${a.name}</div>
+                        <div class="expiry-date">${a.expiry_date}</div>
+                    </div>
+                    ${badge}
+                `;
+                list.appendChild(item);
+            });
+        } catch {}
+    }
+
+    function isRemindersDismissedToday() {
+        const dismissed = localStorage.getItem('reminders_widget_closed');
+        if (!dismissed) return false;
+        return dismissed === new Date().toISOString().slice(0, 10);
+    }
+
+    const remindersCloseBtn = $('#reminders-close');
+    if (remindersCloseBtn) remindersCloseBtn.addEventListener('click', () => {
+        const widget = $('#reminders-widget');
+        if (widget) {
+            widget.classList.add('collapsing');
+            setTimeout(() => { widget.style.display = 'none'; widget.classList.remove('collapsing'); }, 300);
+        }
+        localStorage.setItem('reminders_widget_closed', new Date().toISOString().slice(0, 10));
+    });
+
+    async function loadReminders() {
+        const widget = $('#reminders-widget');
+        const list = $('#reminders-list');
+        if (!widget || !list) return;
+        if (isRemindersDismissedToday()) { widget.style.display = 'none'; return; }
+        try {
+            const resp = await fetch('/api/reminders');
+            if (!resp.ok) return;
+            const data = await resp.json();
+            const rems = data.reminders || [];
+            if (rems.length === 0) { widget.style.display = 'none'; return; }
+
+            widget.style.display = '';
+            list.innerHTML = '';
+            rems.forEach(r => {
+                const item = document.createElement('div');
+                item.className = 'reminder-item';
+                const d = r.days_until;
+                let badge;
+                if (d === null) badge = '<span class="reminder-badge">?</span>';
+                else if (d < 0) {
+                    badge = `<span class="reminder-badge reminder-overdue">Overdue ${Math.abs(d)}d</span>`;
+                    item.classList.add('reminder-overdue-row');
+                } else if (d === 0) {
+                    badge = '<span class="reminder-badge reminder-today">Today</span>';
+                    item.classList.add('reminder-urgent');
+                } else if (d <= 7) {
+                    badge = `<span class="reminder-badge reminder-soon">${d}d</span>`;
+                    item.classList.add('reminder-urgent');
+                } else {
+                    badge = `<span class="reminder-badge">${d}d</span>`;
+                }
+
+                item.innerHTML = `
+                    <div class="reminder-actions">
+                        <button class="reminder-done-btn" title="Mark complete" data-id="${r.id}">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                        </button>
+                    </div>
+                    <div class="reminder-info">
+                        <div class="reminder-title">${r.title}</div>
+                        <div class="reminder-due">${r.due_date}</div>
+                    </div>
+                    ${badge}
+                    <button class="reminder-delete-btn" title="Delete" data-id="${r.id}">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                `;
+
+                item.querySelector('.reminder-done-btn').addEventListener('click', async () => {
+                    await fetch(`/api/reminders/${r.id}/complete`, { method: 'POST' });
+                    showToast('Reminder completed!', 'success');
+                    loadReminders();
+                });
+                item.querySelector('.reminder-delete-btn').addEventListener('click', async () => {
+                    await fetch(`/api/reminders/${r.id}`, { method: 'DELETE' });
+                    showToast('Reminder deleted', 'success');
+                    loadReminders();
+                });
+
+                list.appendChild(item);
+            });
+        } catch {}
+    }
+
+    function isBdayDismissedToday() {
+        const dismissed = localStorage.getItem('bday_widget_closed');
+        if (!dismissed) return false;
+        return dismissed === new Date().toISOString().slice(0, 10);
+    }
+
+    const bdayCloseBtn = $('#bday-close');
+    if (bdayCloseBtn) bdayCloseBtn.addEventListener('click', () => {
+        const widget = $('#birthday-widget');
+        if (widget) {
+            widget.classList.add('collapsing');
+            setTimeout(() => { widget.style.display = 'none'; widget.classList.remove('collapsing'); }, 300);
+        }
+        localStorage.setItem('bday_widget_closed', new Date().toISOString().slice(0, 10));
+    });
+
+    const bdayStatCard = $('#birthday-stat-card');
+    if (bdayStatCard) bdayStatCard.addEventListener('click', () => {
+        localStorage.removeItem('bday_widget_closed');
+        const widget = $('#birthday-widget');
+        if (widget && widget.style.display === 'none') {
+            widget.style.display = '';
+            widget.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+    });
 
     async function loadBirthdays() {
         const widget = $('#birthday-widget');
         const list = $('#birthday-list');
         if (!widget || !list) return;
+        if (isBdayDismissedToday()) { widget.style.display = 'none'; return; }
         try {
             const resp = await fetch('/api/birthdays');
             if (!resp.ok) return;
@@ -260,11 +429,20 @@
         const statsEl = $('#dashboard-stats');
         if (statsEl) statsEl.style.display = viewName === 'chat' ? '' : 'none';
 
+        const bdayWidget = $('#birthday-widget');
+        if (bdayWidget && viewName !== 'chat') bdayWidget.style.display = 'none';
+
+        const expiryWidget = $('#expiry-widget');
+        if (expiryWidget && viewName !== 'chat') expiryWidget.style.display = 'none';
+
+        const remWidget = $('#reminders-widget');
+        if (remWidget && viewName !== 'chat') remWidget.style.display = 'none';
+
         if (viewName === 'documents') loadDocuments();
         if (viewName === 'credentials') loadCredentials();
         if (viewName === 'memory') loadMemory();
         if (viewName === 'database') loadDatabase();
-        if (viewName === 'chat') { loadStats(); loadBirthdays(); }
+        if (viewName === 'chat') { loadStats(); loadBirthdays(); loadExpiryAlerts(); loadReminders(); }
     }
 
     // Restore view from current URL
@@ -372,6 +550,26 @@
             contentEl.innerHTML = '';
             contentEl.textContent = result.text;
 
+            if (result.duplicate_warning && hasFile) {
+                const dupBtn = document.createElement('button');
+                dupBtn.textContent = 'Upload Anyway';
+                dupBtn.style.cssText = 'display:inline-block;margin-top:0.6rem;padding:0.35rem 0.9rem;background:var(--accent);color:#000;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:0.8rem;';
+                dupBtn.addEventListener('click', async () => {
+                    dupBtn.disabled = true;
+                    dupBtn.textContent = 'Uploading...';
+                    formData.append('force', 'true');
+                    try {
+                        const resp = await fetch('/api/chat', { method: 'POST', body: formData });
+                        if (resp.ok) {
+                            const r2 = await resp.json();
+                            contentEl.textContent = r2.text;
+                            loadStats();
+                        }
+                    } catch { contentEl.textContent = 'Re-upload failed.'; }
+                });
+                contentEl.appendChild(dupBtn);
+            }
+
             if (result.file) {
                 const dlBtn = document.createElement('a');
                 dlBtn.href = `data:application/octet-stream;base64,${result.file.data}`;
@@ -413,7 +611,14 @@
 
     // ====== File Handling ======
     if (fileInput) fileInput.addEventListener('change', (e) => {
-        if (e.target.files.length) selectFile(e.target.files[0]);
+        if (e.target.files.length === 1) {
+            selectFile(e.target.files[0]);
+        } else if (e.target.files.length > 1) {
+            const files = Array.from(e.target.files);
+            addMessage('user', `Uploading ${files.length} files...`);
+            bulkUpload(files);
+            fileInput.value = '';
+        }
     });
 
     function selectFile(file) {
@@ -460,30 +665,164 @@
         });
     }
 
-    // ====== Document Upload from Documents View ======
+    // ====== Document Upload from Documents View (with preview) ======
+    let _pendingUploadFile = null;
+
     const docUpload = $('#doc-upload-input');
     if (docUpload) {
         docUpload.addEventListener('change', async (e) => {
             if (!e.target.files.length) return;
-            const file = e.target.files[0];
-            const formData = new FormData();
-            formData.append('message', file.name);
-            formData.append('file', file);
-            try {
-                const resp = await fetch('/api/chat', { method: 'POST', body: formData });
-                if (resp.status === 401) { redirectToLogin(); return; }
-                if (resp.ok) {
-                    showToast('Document uploaded!', 'success');
-                    loadDocuments();
-                    loadStats();
-                    loadBirthdays();
-                }
-            } catch {
-                showToast('Upload failed', 'error');
-            }
+            const files = Array.from(e.target.files);
             docUpload.value = '';
+
+            if (files.length === 1) {
+                _pendingUploadFile = files[0];
+                showUploadPreview(files[0]);
+            } else {
+                await bulkUpload(files);
+            }
         });
     }
+
+    async function bulkUpload(files) {
+        const total = files.length;
+        let done = 0;
+        let errors = 0;
+        showToast(`Uploading 0/${total}...`, 'success');
+
+        const upload = async (file) => {
+            const fd = new FormData();
+            fd.append('message', file.name);
+            fd.append('file', file);
+            try {
+                const resp = await fetch('/api/chat', { method: 'POST', body: fd });
+                if (resp.status === 401) { redirectToLogin(); return; }
+                if (!resp.ok) errors++;
+            } catch { errors++; }
+            done++;
+            showToast(`Uploading ${done}/${total}...`, 'success');
+        };
+
+        const concurrency = 3;
+        const queue = [...files];
+        const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+            while (queue.length > 0) {
+                await upload(queue.shift());
+            }
+        });
+        await Promise.all(workers);
+
+        const msg = errors > 0
+            ? `Uploaded ${done - errors}/${total} (${errors} failed)`
+            : `All ${total} documents uploaded!`;
+        showToast(msg, errors > 0 ? 'error' : 'success');
+        loadDocuments();
+        loadStats();
+        loadBirthdays();
+    }
+
+    async function showUploadPreview(file) {
+        const modal = $('#upload-preview-modal');
+        const loading = $('#upload-preview-loading');
+        const content = $('#upload-preview-content');
+        const nameInput = $('#preview-name');
+        const metaEl = $('#preview-meta');
+        const uploadBtn = $('#preview-upload');
+        if (!modal) return;
+
+        modal.classList.remove('hidden');
+        loading.style.display = '';
+        content.style.display = 'none';
+        uploadBtn.disabled = true;
+        nameInput.value = file.name;
+        metaEl.innerHTML = '';
+
+        try {
+            const fd = new FormData();
+            fd.append('file', file);
+            const resp = await fetch('/api/upload-preview', { method: 'POST', body: fd });
+            if (resp.status === 401) { redirectToLogin(); return; }
+            if (resp.ok) {
+                const data = await resp.json();
+                nameInput.value = data.suggested_name || file.name;
+                let chips = `<span class="meta-chip">${data.category}</span>`;
+                if (data.sub_category) chips += `<span class="meta-chip chip-sub">${data.sub_category}</span>`;
+                if (data.doctor) chips += `<span class="meta-chip chip-doctor">Dr. ${data.doctor}</span>`;
+                if (data.doc_date) chips += `<span class="meta-chip chip-date">${data.doc_date}</span>`;
+                metaEl.innerHTML = chips;
+                if (data.summary) {
+                    metaEl.innerHTML += `<p class="preview-summary">${data.summary}</p>`;
+                }
+            }
+        } catch {
+            nameInput.value = file.name;
+        }
+
+        loading.style.display = 'none';
+        content.style.display = '';
+        uploadBtn.disabled = false;
+        nameInput.focus();
+        nameInput.select();
+    }
+
+    async function doPreviewUpload(forceUpload = false) {
+        if (!_pendingUploadFile) return;
+        const name = ($('#preview-name').value || '').trim() || _pendingUploadFile.name;
+        const btn = $('#preview-upload');
+        btn.disabled = true;
+        btn.textContent = forceUpload ? 'Uploading...' : 'Analyzing...';
+
+        const formData = new FormData();
+        formData.append('message', name);
+        formData.append('file', _pendingUploadFile);
+        if (forceUpload) formData.append('force', 'true');
+
+        try {
+            const resp = await fetch('/api/chat', { method: 'POST', body: formData });
+            if (resp.status === 401) { redirectToLogin(); return; }
+            const data = await resp.json();
+
+            if (data.duplicate_warning && !forceUpload) {
+                btn.textContent = 'Upload Anyway';
+                btn.disabled = false;
+                btn.onclick = () => doPreviewUpload(true);
+                showToast(`Duplicate: ${data.existing_name}`, 'error');
+                return;
+            }
+
+            showToast('Document uploaded!', 'success');
+            loadDocuments();
+            loadStats();
+            loadBirthdays();
+        } catch {
+            showToast('Upload failed', 'error');
+        } finally {
+            if (!$('#preview-upload').textContent.includes('Anyway')) {
+                btn.disabled = false;
+                btn.textContent = 'Upload';
+                btn.onclick = null;
+                _pendingUploadFile = null;
+                $('#upload-preview-modal').classList.add('hidden');
+            }
+        }
+    }
+
+    const previewUploadBtn = $('#preview-upload');
+    if (previewUploadBtn) previewUploadBtn.addEventListener('click', () => doPreviewUpload(false));
+
+    const previewCancelBtn = $('#preview-cancel');
+    if (previewCancelBtn) previewCancelBtn.addEventListener('click', () => {
+        _pendingUploadFile = null;
+        $('#upload-preview-modal').classList.add('hidden');
+    });
+
+    const previewModal = $('#upload-preview-modal');
+    if (previewModal) previewModal.addEventListener('click', (e) => {
+        if (e.target === previewModal) {
+            _pendingUploadFile = null;
+            previewModal.classList.add('hidden');
+        }
+    });
 
     // ====== Lock & Logout ======
     const lockBtn = $('#lock-btn');
@@ -718,9 +1057,14 @@
             const subLabel = subTag ? `<span class="sub-tag">${subTag.slice(4)}</span>` : '';
 
             card.innerHTML = `
-                <button class="delete-btn" title="Delete document" data-type="document" data-id="${doc.id}" data-name="${doc.name}">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                </button>
+                <div class="card-actions">
+                    <button class="share-btn" title="Share document" data-id="${doc.id}" data-name="${doc.name}">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+                    </button>
+                    <button class="delete-btn" title="Delete document" data-type="document" data-id="${doc.id}" data-name="${doc.name}">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                    </button>
+                </div>
                 <div class="category">${doc.category} ${subLabel}</div>
                 <div class="name">${doc.name}</div>
             `;
@@ -728,10 +1072,107 @@
                 e.stopPropagation();
                 confirmDelete('document', doc.id, doc.name);
             });
+            card.querySelector('.share-btn').addEventListener('click', (e) => {
+                e.stopPropagation();
+                openShareModal(doc.id, doc.name);
+            });
             addTiltEffect(card);
             container.appendChild(card);
         });
     }
+
+    // ====== Share Modal ======
+    let _shareDocId = null;
+
+    function openShareModal(docId, docName) {
+        _shareDocId = docId;
+        const modal = $('#share-modal');
+        const nameEl = $('#share-doc-name');
+        const emailForm = $('#share-email-form');
+        if (!modal) return;
+        nameEl.textContent = docName;
+        emailForm.style.display = 'none';
+        modal.classList.remove('hidden');
+    }
+
+    const shareCancelBtn = $('#share-cancel');
+    if (shareCancelBtn) shareCancelBtn.addEventListener('click', () => {
+        $('#share-modal').classList.add('hidden');
+        _shareDocId = null;
+    });
+
+    const shareModal = $('#share-modal');
+    if (shareModal) shareModal.addEventListener('click', (e) => {
+        if (e.target === shareModal) { shareModal.classList.add('hidden'); _shareDocId = null; }
+    });
+
+    const shareWABtn = $('#share-whatsapp');
+    if (shareWABtn) shareWABtn.addEventListener('click', async () => {
+        if (!_shareDocId) return;
+        shareWABtn.disabled = true;
+        try {
+            const resp = await fetch('/api/share/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ doc_id: _shareDocId }),
+            });
+            if (!resp.ok) { showToast('Failed to create share link', 'error'); return; }
+            const data = await resp.json();
+            const text = encodeURIComponent(`Shared from Vault: ${$('#share-doc-name').textContent}\n${data.share_url}`);
+            window.open(`https://wa.me/?text=${text}`, '_blank');
+            showToast('Share link created (expires in 10 min)', 'success');
+        } catch { showToast('Failed to share', 'error'); }
+        finally { shareWABtn.disabled = false; }
+    });
+
+    const shareEmailBtn = $('#share-email');
+    if (shareEmailBtn) shareEmailBtn.addEventListener('click', () => {
+        const emailForm = $('#share-email-form');
+        emailForm.style.display = emailForm.style.display === 'none' ? 'flex' : 'none';
+        if (emailForm.style.display !== 'none') $('#share-email-input').focus();
+    });
+
+    const shareEmailSendBtn = $('#share-email-send');
+    if (shareEmailSendBtn) shareEmailSendBtn.addEventListener('click', async () => {
+        const email = ($('#share-email-input').value || '').trim();
+        if (!email || !_shareDocId) return;
+        shareEmailSendBtn.disabled = true;
+        shareEmailSendBtn.textContent = 'Sending...';
+        try {
+            const resp = await fetch('/api/share/email', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ doc_id: _shareDocId, to_email: email }),
+            });
+            if (resp.ok) {
+                showToast(`Sent to ${email}!`, 'success');
+                $('#share-email-input').value = '';
+                $('#share-email-form').style.display = 'none';
+            } else {
+                const err = await resp.json().catch(() => ({}));
+                showToast(err.detail || 'Failed to send email', 'error');
+            }
+        } catch { showToast('Failed to send email', 'error'); }
+        finally { shareEmailSendBtn.disabled = false; shareEmailSendBtn.textContent = 'Send'; }
+    });
+
+    const shareCopyBtn = $('#share-copy-link');
+    if (shareCopyBtn) shareCopyBtn.addEventListener('click', async () => {
+        if (!_shareDocId) return;
+        shareCopyBtn.disabled = true;
+        try {
+            const resp = await fetch('/api/share/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ doc_id: _shareDocId }),
+            });
+            if (!resp.ok) { showToast('Failed to create link', 'error'); return; }
+            const data = await resp.json();
+            await navigator.clipboard.writeText(data.share_url);
+            showToast('Link copied! Expires in 10 min.', 'success');
+        } catch { showToast('Failed to copy link', 'error'); }
+        finally { shareCopyBtn.disabled = false; }
+    });
 
     async function loadCredentials() {
         const container = $('#credentials-list');
@@ -996,6 +1437,18 @@
             if (delModal && !delModal.classList.contains('hidden')) {
                 _pendingDelete = null;
                 delModal.classList.add('hidden');
+                return;
+            }
+            const shareM = $('#share-modal');
+            if (shareM && !shareM.classList.contains('hidden')) {
+                shareM.classList.add('hidden');
+                _shareDocId = null;
+                return;
+            }
+            const previewM = $('#upload-preview-modal');
+            if (previewM && !previewM.classList.contains('hidden')) {
+                _pendingUploadFile = null;
+                previewM.classList.add('hidden');
                 return;
             }
             const modal = $('#settings-modal');
