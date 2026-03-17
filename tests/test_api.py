@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import json
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 
 from vault.config import VaultConfig
 from vault.security.encryption import derive_all_keys, generate_verification_token
-from vault.security.session import Session, SessionStore
+from vault.security.session import Session
 
 TEST_PASSWORD = "test-password-123"
 TEST_SALT = b"\x00" * 32

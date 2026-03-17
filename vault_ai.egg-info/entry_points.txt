@@ -1,3 +1,0 @@
-[console_scripts]
-vault = vault.cli:main
-vault-mcp = vault.mcp_server:run_mcp_server

@@ -94,7 +94,7 @@ Vault runs as two Docker containers orchestrated by Docker Compose on a Linux VM
 
 ```
 Base: python:3.11-slim
-System packages: build-essential, libsqlcipher-dev, tesseract-ocr,
+System packages: build-essential, tesseract-ocr,
                  tesseract-ocr-eng, libgl1, libglib2.0-0
 Working dir: /app
 Entry point: vault serve --host 0.0.0.0 --port 8080
@@ -1087,7 +1087,6 @@ This is the fundamental trade-off of true zero-knowledge encryption: maximum sec
 | `rich` | >=13.0.0 | Terminal formatting |
 | `cryptography` | >=41.0.0 | AES-256-GCM encryption |
 | `argon2-cffi` | >=23.1.0 | Argon2id key derivation |
-| `pysqlcipher3` | >=1.2.0 | SQLite bindings (with SQLCipher support) |
 | `chromadb` | >=0.4.0 | Local vector database |
 | `sentence-transformers` | >=2.2.0 | Text embedding models |
 | `litellm` | >=1.0.0 | Unified LLM client (OpenAI, Ollama, etc.) |
@@ -1105,7 +1104,6 @@ This is the fundamental trade-off of true zero-knowledge encryption: maximum sec
 | Package | Purpose |
 |---------|---------|
 | `build-essential` | Compilation tools for native extensions |
-| `libsqlcipher-dev` | SQLCipher development headers |
 | `tesseract-ocr` | OCR engine |
 | `tesseract-ocr-eng` | English OCR language data |
 | `libgl1` | OpenGL (required by some image processing libs) |

@@ -121,7 +121,7 @@ The file `~/.cursor/mcp.json` tells Cursor where to find the Vault MCP server:
 {
   "mcpServers": {
     "vault": {
-      "command": "/Users/anindyag/vault/.venv/bin/vault-mcp"
+      "command": "<path-to-vault>/.venv/bin/vault-mcp"
     }
   }
 }
@@ -277,7 +277,7 @@ When you upload a file (say, a photo of your Aadhaar card):
 3. Tesseract OCR extracts text:
    "GOVERNMENT OF INDIA
     Aadhaar - UID
-    Name: Anindya Gupta
+    Name: Your Name
     DOB: 15/01/1990
     Aadhaar No: 1234 5678 9012"
          |

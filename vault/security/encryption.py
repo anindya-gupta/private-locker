@@ -8,9 +8,7 @@ Three separate derived keys: database, files, credentials.
 from __future__ import annotations
 
 import hashlib
-import os
 import secrets
-import struct
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional

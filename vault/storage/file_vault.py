@@ -7,7 +7,6 @@ and stored on disk. No plaintext file ever touches the filesystem.
 
 from __future__ import annotations
 
-import os
 import uuid
 from pathlib import Path
 from typing import Optional

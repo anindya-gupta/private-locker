@@ -3,8 +3,10 @@ __pycache__/
 *.pyo
 .pytest_cache/
 *.egg-info/
+vault_ai.egg-info/
 dist/
 build/
 .env
 .venv/
 *.log
+*.pdf

@@ -87,7 +87,7 @@ Extract:
 3. "doc_date": Date of the document/visit/report in YYYY-MM-DD format. Use null if unclear.
 4. "keywords": Array of 3-5 relevant keywords describing the document content.
 5. "summary": One-line summary of what this document contains.
-6. "suggested_name": A short, descriptive name for this document (e.g., "Eye Prescription - Dr. Bansal - Mar 2026", "Aadhaar Card - Anindya Gupta", "Passport - Renewal 2025"). Include key identifiers like doctor, person, date, or institution. Keep it under 60 chars.
+6. "suggested_name": A short, descriptive name for this document (e.g., "Eye Prescription - Dr. Bansal - Mar 2026", "Aadhaar Card - Document Owner", "Passport - Renewal 2025"). Include key identifiers like doctor, person, date, or institution. Keep it under 60 chars.
 7. "expiry_date": Expiration/validity date in YYYY-MM-DD format if found (e.g., passport expiry, insurance end date, license validity, membership renewal). Use null if none.
 
 Respond with ONLY JSON:

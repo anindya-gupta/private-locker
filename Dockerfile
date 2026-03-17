@@ -2,7 +2,6 @@ FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    libsqlcipher-dev \
     tesseract-ocr \
     tesseract-ocr-eng \
     libgl1 \
