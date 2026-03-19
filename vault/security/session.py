@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-from vault.security.encryption import DerivedKeys, derive_all_keys, verify_password
+from vault.security.encryption import DerivedKeys, derive_all_keys, verify_password_and_derive_keys
 
 DEFAULT_TIMEOUT_SECONDS = 300
 SESSION_TOKEN_BYTES = 32
@@ -54,9 +54,10 @@ class Session:
     def unlock(self, password: str) -> bool:
         if self._salt is None or self._verification_token is None:
             raise RuntimeError("Session not configured. Run 'vault init' first.")
-        if not verify_password(password, self._salt, self._verification_token):
+        keys = verify_password_and_derive_keys(password, self._salt, self._verification_token)
+        if keys is None:
             return False
-        self._keys = derive_all_keys(password, self._salt)
+        self._keys = keys
         self._locked = False
         self._touch()
         return True
@@ -111,10 +112,10 @@ class SessionStore:
         if self._username and username != self._username:
             return None
 
-        if not verify_password(password, self._salt, self._verification_token):
+        keys = verify_password_and_derive_keys(password, self._salt, self._verification_token)
+        if keys is None:
             return None
 
-        keys = derive_all_keys(password, self._salt)
         token = secrets.token_urlsafe(SESSION_TOKEN_BYTES)
         client = Session()
         client.configure(self._salt, self._verification_token, self._timeout)

@@ -124,9 +124,19 @@ def generate_verification_token(password: str, salt: bytes) -> bytes:
 
 def verify_password(password: str, salt: bytes, token: bytes) -> bool:
     """Verify a master password against a stored verification token."""
+    return verify_password_and_derive_keys(password, salt, token) is not None
+
+
+def verify_password_and_derive_keys(password: str, salt: bytes, token: bytes) -> Optional[DerivedKeys]:
+    """
+    Verify password and return derived keys if valid. Use this during unlock
+    to avoid deriving keys twice (Argon2id is expensive, especially on small VMs).
+    """
     try:
         keys = derive_all_keys(password, salt)
         plaintext = decrypt(token, keys.db_key)
-        return plaintext == b"VAULT_VERIFY_TOKEN_V1"
+        if plaintext == b"VAULT_VERIFY_TOKEN_V1":
+            return keys
+        return None
     except Exception:
-        return False
+        return None
