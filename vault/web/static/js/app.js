@@ -467,6 +467,7 @@
     }, { passive: true });
 
     document.addEventListener('touchend', (e) => {
+        if (!e.changedTouches || !e.changedTouches.length) return;
         const dx = e.changedTouches[0].clientX - touchStartX;
         const dy = e.changedTouches[0].clientY - touchStartY;
         if (Math.abs(dx) < 60 || Math.abs(dy) > Math.abs(dx) * 0.7) return;
@@ -579,7 +580,8 @@
                 contentEl.appendChild(dlBtn);
             }
 
-            if (result.share_url) {
+            if (result.share_path) {
+                const fullShareUrl = window.location.origin + result.share_path;
                 const shareWrap = document.createElement('div');
                 shareWrap.style.cssText = 'margin-top:0.6rem;padding:0.5rem 0;';
                 const shareLabel = document.createElement('div');
@@ -589,18 +591,20 @@
                 const linkLine = document.createElement('div');
                 linkLine.style.cssText = 'display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;';
                 const shareLink = document.createElement('a');
-                shareLink.href = result.share_url;
+                shareLink.href = fullShareUrl;
                 shareLink.target = '_blank';
                 shareLink.rel = 'noopener';
-                shareLink.textContent = result.share_url;
+                shareLink.textContent = fullShareUrl;
                 shareLink.style.cssText = 'color:var(--accent);word-break:break-all;text-decoration:none;';
                 linkLine.appendChild(shareLink);
                 const copyBtn = document.createElement('button');
                 copyBtn.textContent = 'Copy link';
                 copyBtn.style.cssText = 'display:inline-block;padding:0.25rem 0.5rem;font-size:0.8rem;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;cursor:pointer;color:var(--text-1);';
-                copyBtn.addEventListener('click', () => {
-                    navigator.clipboard.writeText(result.share_url);
-                    if (typeof showToast === 'function') showToast('Link copied', 'success');
+                copyBtn.addEventListener('click', async () => {
+                    try {
+                        await navigator.clipboard.writeText(fullShareUrl);
+                        showToast('Link copied', 'success');
+                    } catch { showToast('Failed to copy', 'error'); }
                 });
                 linkLine.appendChild(copyBtn);
                 shareWrap.appendChild(linkLine);
@@ -1146,7 +1150,8 @@
             });
             if (!resp.ok) { showToast('Failed to create share link', 'error'); return; }
             const data = await resp.json();
-            const text = encodeURIComponent(`Shared from Vault: ${$('#share-doc-name').textContent}\n${data.share_url}`);
+            const fullUrl = window.location.origin + data.share_path;
+            const text = encodeURIComponent(`Shared from Vault: ${$('#share-doc-name').textContent}\n${fullUrl}`);
             window.open(`https://wa.me/?text=${text}`, '_blank');
             showToast('Share link created (expires in 10 min)', 'success');
         } catch { showToast('Failed to share', 'error'); }
@@ -1196,7 +1201,8 @@
             });
             if (!resp.ok) { showToast('Failed to create link', 'error'); return; }
             const data = await resp.json();
-            await navigator.clipboard.writeText(data.share_url);
+            const fullUrl = window.location.origin + data.share_path;
+            await navigator.clipboard.writeText(fullUrl);
             showToast('Link copied! Expires in 10 min.', 'success');
         } catch { showToast('Failed to copy link', 'error'); }
         finally { shareCopyBtn.disabled = false; }

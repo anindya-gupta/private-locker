@@ -26,6 +26,7 @@
     --accent-glow-strong: rgba(201, 168, 76, 0.2);
 
     --green: #5eca8a;
+    --success: #5eca8a;
     --green-glow: rgba(94, 202, 138, 0.1);
     --red: #e05555;
     --red-glow: rgba(224, 85, 85, 0.1);
@@ -882,7 +883,19 @@ button:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important;
 .birthday-list {
     display: flex;
     flex-direction: column;
+    max-height: 320px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.15) transparent;
 }
+
+.birthday-list::-webkit-scrollbar { width: 5px; }
+.birthday-list::-webkit-scrollbar-track { background: transparent; }
+.birthday-list::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.15);
+    border-radius: 4px;
+}
+.birthday-list::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.25); }
 
 .birthday-item {
     display: flex;

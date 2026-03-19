@@ -369,10 +369,10 @@ async def api_chat(
             s._last_doc_name = response.data.get("doc_name") or response.data.get("doc_id")
         if response.data and response.data.get("create_share_for_doc_id"):
             try:
-                share_url, _token, expires_in = _create_share_link_for_doc(
+                share_path, _token, expires_in = _create_share_link_for_doc(
                     request, response.data["create_share_for_doc_id"], s
                 )
-                result["share_url"] = share_url
+                result["share_path"] = share_path
                 result["share_expires_in"] = expires_in
             except HTTPException:
                 pass
@@ -818,7 +818,12 @@ def _cleanup_expired_tokens() -> None:
 
 
 def _create_share_link_for_doc(request: Request, doc_id: str, s: Session) -> tuple[str, str, int]:
-    """Create a temporary share link for a document; return (share_url, token, expires_in)."""
+    """Create a temporary share link for a document; return (share_path, token, expires_in).
+
+    Returns a relative path (/api/share/{token}) so the frontend can prepend
+    window.location.origin. This avoids broken URLs when behind a reverse proxy
+    (e.g. Caddy) where request.base_url resolves to the internal Docker hostname.
+    """
     if not agent or not agent.db._conn:
         raise HTTPException(500, "Database not available")
     doc = agent.db.get_document(doc_id, s.keys.db_key)
@@ -835,9 +840,8 @@ def _create_share_link_for_doc(request: Request, doc_id: str, s: Session) -> tup
         "doc_name": doc["name"],
         "created_at": time.time(),
     }
-    base_url = str(request.base_url).rstrip("/")
-    share_url = f"{base_url}/api/share/{token}"
-    return share_url, token, SHARE_TOKEN_TTL
+    share_path = f"/api/share/{token}"
+    return share_path, token, SHARE_TOKEN_TTL
 
 
 @app.post("/api/share/create")
@@ -848,8 +852,8 @@ async def api_share_create(request: Request):
     doc_id = body.get("doc_id", "")
     if not doc_id:
         raise HTTPException(400, "doc_id required")
-    share_url, token, expires_in = _create_share_link_for_doc(request, doc_id, s)
-    return {"share_url": share_url, "token": token, "expires_in": expires_in}
+    share_path, token, expires_in = _create_share_link_for_doc(request, doc_id, s)
+    return {"share_path": share_path, "token": token, "expires_in": expires_in}
 
 
 @app.get("/api/share/{token}")
