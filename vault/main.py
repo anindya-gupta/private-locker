@@ -364,6 +364,18 @@ async def api_chat(
         if response.data and response.data.get("duplicate_warning"):
             result["duplicate_warning"] = True
             result["existing_name"] = response.data.get("existing_name")
+        if response.data and response.data.get("doc_id"):
+            s._last_doc_id = response.data.get("doc_id")
+            s._last_doc_name = response.data.get("doc_name") or response.data.get("doc_id")
+        if response.data and response.data.get("create_share_for_doc_id"):
+            try:
+                share_url, _token, expires_in = _create_share_link_for_doc(
+                    request, response.data["create_share_for_doc_id"], s
+                )
+                result["share_url"] = share_url
+                result["share_expires_in"] = expires_in
+            except HTTPException:
+                pass
         if response.file_data and response.file_name:
             result["file"] = {
                 "name": response.file_name,
@@ -805,26 +817,16 @@ def _cleanup_expired_tokens() -> None:
         del _share_tokens[t]
 
 
-@app.post("/api/share/create")
-async def api_share_create(request: Request):
-    """Create a temporary share link for a document."""
-    s = _require_session(request)
+def _create_share_link_for_doc(request: Request, doc_id: str, s: Session) -> tuple[str, str, int]:
+    """Create a temporary share link for a document; return (share_url, token, expires_in)."""
     if not agent or not agent.db._conn:
         raise HTTPException(500, "Database not available")
-
-    body = await request.json()
-    doc_id = body.get("doc_id", "")
-    if not doc_id:
-        raise HTTPException(400, "doc_id required")
-
     doc = agent.db.get_document(doc_id, s.keys.db_key)
     if not doc:
         raise HTTPException(404, "Document not found")
     if not doc.get("file_ref"):
         raise HTTPException(400, "Document has no file attached")
-
     file_data, original_name = agent.file_vault.retrieve(doc["file_ref"], s.keys.file_key)
-
     _cleanup_expired_tokens()
     token = secrets.token_urlsafe(32)
     _share_tokens[token] = {
@@ -833,10 +835,21 @@ async def api_share_create(request: Request):
         "doc_name": doc["name"],
         "created_at": time.time(),
     }
-
     base_url = str(request.base_url).rstrip("/")
     share_url = f"{base_url}/api/share/{token}"
-    return {"share_url": share_url, "token": token, "expires_in": SHARE_TOKEN_TTL}
+    return share_url, token, SHARE_TOKEN_TTL
+
+
+@app.post("/api/share/create")
+async def api_share_create(request: Request):
+    """Create a temporary share link for a document."""
+    s = _require_session(request)
+    body = await request.json()
+    doc_id = body.get("doc_id", "")
+    if not doc_id:
+        raise HTTPException(400, "doc_id required")
+    share_url, token, expires_in = _create_share_link_for_doc(request, doc_id, s)
+    return {"share_url": share_url, "token": token, "expires_in": expires_in}
 
 
 @app.get("/api/share/{token}")

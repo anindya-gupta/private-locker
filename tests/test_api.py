@@ -235,6 +235,70 @@ class TestShareAPI:
                           headers={"Content-Type": "application/json"})
         assert resp.status_code == 404
 
+    def test_chat_share_intent_creates_link(self, app_client):
+        """Sending 'email this to me' via chat should return a share_url when a doc was just retrieved."""
+        client, agent = app_client
+        doc_id = self._upload_and_get_id(client)
+        agent.llm.detect_intent = AsyncMock(return_value={
+            "intent": "share_document",
+            "entities": {"document": ""},
+            "confidence": 0.95,
+        })
+        from vault.security.session import session_store
+        sess = session_store._sessions[SESSION_TOKEN]
+        sess._last_doc_id = doc_id
+        resp = client.post("/api/chat", data={"message": "email this to me"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "share_url" in data, f"Expected share_url in response, got: {data}"
+        assert "share_expires_in" in data
+        assert data["share_url"].startswith("http")
+
+    def test_chat_share_by_name(self, app_client):
+        """Sending 'share my Test Doc' should find the doc by name and return a share link."""
+        client, agent = app_client
+        self._upload_and_get_id(client)
+        agent.llm.detect_intent = AsyncMock(return_value={
+            "intent": "share_document",
+            "entities": {"document": "Test Doc"},
+            "confidence": 0.95,
+        })
+        resp = client.post("/api/chat", data={"message": "share my Test Doc"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "share_url" in data, f"Expected share_url in response, got: {data}"
+
+    def test_chat_share_no_doc_found(self, app_client):
+        """When no doc matches, agent should ask the user to specify."""
+        client, agent = app_client
+        agent.llm.detect_intent = AsyncMock(return_value={
+            "intent": "share_document",
+            "entities": {"document": "nonexistent thing"},
+            "confidence": 0.95,
+        })
+        resp = client.post("/api/chat", data={"message": "share my nonexistent thing"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "share_url" not in data
+        assert "don't know which document" in data["text"].lower() or "tell me" in data["text"].lower()
+
+    def test_retrieve_doc_sets_last_doc_id(self, app_client):
+        """Retrieving a document via chat should set _last_doc_id on the session."""
+        client, agent = app_client
+        doc_id = self._upload_and_get_id(client)
+        docs = client.get("/api/documents").json()["documents"]
+        doc_name = docs[0]["name"]
+        agent.llm.detect_intent = AsyncMock(return_value={
+            "intent": "retrieve_document",
+            "entities": {"document": doc_name},
+            "confidence": 0.95,
+        })
+        resp = client.post("/api/chat", data={"message": f"show me {doc_name}"})
+        assert resp.status_code == 200
+        from vault.security.session import session_store
+        sess = session_store._sessions[SESSION_TOKEN]
+        assert sess._last_doc_id == doc_id
+
 
 class TestExpiryAlerts:
     def test_no_alerts(self, app_client):

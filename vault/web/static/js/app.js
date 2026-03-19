@@ -579,6 +579,34 @@
                 contentEl.appendChild(dlBtn);
             }
 
+            if (result.share_url) {
+                const shareWrap = document.createElement('div');
+                shareWrap.style.cssText = 'margin-top:0.6rem;padding:0.5rem 0;';
+                const shareLabel = document.createElement('div');
+                shareLabel.textContent = 'Share link (expires in ' + (result.share_expires_in ? Math.round(result.share_expires_in / 60) + ' min)' : '10 min)') + ':';
+                shareLabel.style.cssText = 'font-size:0.85rem;color:var(--text-3);margin-bottom:0.25rem;';
+                shareWrap.appendChild(shareLabel);
+                const linkLine = document.createElement('div');
+                linkLine.style.cssText = 'display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;';
+                const shareLink = document.createElement('a');
+                shareLink.href = result.share_url;
+                shareLink.target = '_blank';
+                shareLink.rel = 'noopener';
+                shareLink.textContent = result.share_url;
+                shareLink.style.cssText = 'color:var(--accent);word-break:break-all;text-decoration:none;';
+                linkLine.appendChild(shareLink);
+                const copyBtn = document.createElement('button');
+                copyBtn.textContent = 'Copy link';
+                copyBtn.style.cssText = 'display:inline-block;padding:0.25rem 0.5rem;font-size:0.8rem;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;cursor:pointer;color:var(--text-1);';
+                copyBtn.addEventListener('click', () => {
+                    navigator.clipboard.writeText(result.share_url);
+                    if (typeof showToast === 'function') showToast('Link copied', 'success');
+                });
+                linkLine.appendChild(copyBtn);
+                shareWrap.appendChild(linkLine);
+                contentEl.appendChild(shareWrap);
+            }
+
             loadStats();
             loadBirthdays();
         } catch (err) {

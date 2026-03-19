@@ -94,6 +94,7 @@ class VaultAgent:
             "recall_birthdays": self._handle_recall_birthdays,
             "query_document": self._handle_query_document,
             "retrieve_document": self._handle_retrieve_document,
+            "share_document": self._handle_share_document,
             "store_document": self._handle_store_document_prompt,
             "list_items": self._handle_list_items,
             "delete_item": self._handle_delete_item,
@@ -568,7 +569,12 @@ class VaultAgent:
                     label = f"Here's your latest document: {doc['name']}"
                     if date_label:
                         label += f" ({date_label})"
-                    return AgentResponse(text=label, file_data=file_data, file_name=original_name)
+                    return AgentResponse(
+                        text=label,
+                        file_data=file_data,
+                        file_name=original_name,
+                        data={"doc_id": doc["id"], "doc_name": doc["name"]},
+                    )
                 except FileNotFoundError:
                     return AgentResponse(text=f"Document '{doc['name']}' record exists but the file is missing.")
 
@@ -578,7 +584,12 @@ class VaultAgent:
             if doc.get("file_ref"):
                 try:
                     file_data, original_name = self.file_vault.retrieve(doc["file_ref"], keys.file_key)
-                    return AgentResponse(text=f"Here's your earliest document: {doc['name']}", file_data=file_data, file_name=original_name)
+                    return AgentResponse(
+                        text=f"Here's your earliest document: {doc['name']}",
+                        file_data=file_data,
+                        file_name=original_name,
+                        data={"doc_id": doc["id"], "doc_name": doc["name"]},
+                    )
                 except FileNotFoundError:
                     return AgentResponse(text=f"Document '{doc['name']}' record exists but the file is missing.")
 
@@ -601,11 +612,37 @@ class VaultAgent:
                     text=f"Here's your document: {doc['name']}",
                     file_data=file_data,
                     file_name=original_name,
+                    data={"doc_id": doc["id"], "doc_name": doc["name"]},
                 )
             except FileNotFoundError:
                 return AgentResponse(text=f"Document '{doc['name']}' record exists but the file is missing.")
 
         return AgentResponse(text=f"Document '{doc['name']}' found but has no attached file.")
+
+    async def _handle_share_document(self, message: str, entities: dict, keys: Any) -> AgentResponse:
+        """Handle share/email/send document — resolve doc, return create_share_for_doc_id for API to create link."""
+        doc = None
+        doc_name_entity = (entities.get("document") or "").strip().lower()
+        if doc_name_entity in ("", "this", "it"):
+            last_id = getattr(self.session, "_last_doc_id", None)
+            if last_id:
+                doc = self.db.get_document(last_id, keys.db_key)
+        if not doc and (doc_name_entity or message):
+            docs = self.db.search_documents(doc_name_entity or message, keys.db_key)
+            if not docs:
+                docs = self._find_relevant_documents(message, keys)
+            if docs:
+                doc = docs[0]
+        if not doc:
+            return AgentResponse(
+                text="I don't know which document to share. Tell me the document name (e.g. \"share my college degree\") or retrieve a document first, then say \"share this\" or \"email this to me\"."
+            )
+        if not doc.get("file_ref"):
+            return AgentResponse(text=f"Document '{doc['name']}' has no file attached to share.")
+        return AgentResponse(
+            text="Here's a share link below (expires in 10 minutes). You can paste it in WhatsApp or open it to download. To email the file, use the Share button next to the document in the Documents tab.",
+            data={"create_share_for_doc_id": doc["id"], "doc_name": doc["name"]},
+        )
 
     async def _handle_store_document_prompt(self, message: str, entities: dict, keys: Any) -> AgentResponse:
         return AgentResponse(text="Please upload a file along with your message. You can drag and drop it in the web UI or use the CLI upload command.")

@@ -27,6 +27,8 @@ class Session:
     _salt: Optional[bytes] = None
     _verification_token: Optional[bytes] = None
     _locked: bool = True
+    _last_doc_id: Optional[str] = None
+    _last_doc_name: Optional[str] = None
 
     @property
     def is_locked(self) -> bool:

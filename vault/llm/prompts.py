@@ -35,12 +35,14 @@ Possible intents:
 - "delete_item": User wants to remove something
 - "set_reminder": User wants to set a reminder or follow-up (e.g., "remind me to X in Y days", "set reminder for passport renewal on Jan 15")
 - "list_reminders": User asks about their reminders, follow-ups, or upcoming tasks
+- "share_document": User wants to share, email, or send a document (e.g., "email this to me", "share on WhatsApp", "send me this", "can you email/share this")
 - "general": General conversation, questions about capabilities, greetings, or unclear intent
 
 IMPORTANT classification rules:
 - Questions ABOUT capabilities ("can you remember X?", "could you store Y?", "what can you do?") are "general", NOT "remember_fact".
 - Hypothetical or conditional messages ("if I give you...", "would you be able to...") are "general".
 - Only classify as "remember_fact" when the user is ACTUALLY STATING a fact, not asking whether you CAN remember.
+- When the user asks to share/email/send "this" document or the one they just got, use "share_document" with document empty or "this".
 
 User message: {message}
 
