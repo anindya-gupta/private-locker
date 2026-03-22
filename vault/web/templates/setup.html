@@ -9,7 +9,7 @@
     <meta name="apple-mobile-web-app-title" content="Vault">
     <link rel="manifest" href="/static/manifest.json">
     <link rel="apple-touch-icon" href="/static/icons/vault-192.svg">
-    <title>Vault — Setup</title>
+    <title>Vault — Sign Up</title>
     <link rel="stylesheet" href="/static/css/style.css?v=6">
 </head>
 <body class="auth-page setup-page">
@@ -55,8 +55,8 @@
                     <span class="brand-name">Vault</span>
                 </div>
 
-                <h1 class="auth-title">Create your <span class="gradient-text">Vault</span></h1>
-                <p class="subtitle">Your encrypted personal AI assistant.<br>All data stays on your machine.</p>
+                <h1 class="auth-title">Create your <span class="gradient-text">Account</span></h1>
+                <p class="subtitle">Your encrypted personal AI assistant.<br>All data is end-to-end encrypted.</p>
 
                 <form id="setup-form">
                     <div class="form-group">
@@ -73,7 +73,7 @@
                     </div>
                     <div id="error" class="error-msg"></div>
                     <button type="submit" id="submit-btn">
-                        <span class="btn-text">Initialize Vault</span>
+                        <span class="btn-text">Create Account</span>
                         <svg class="btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
                             <path d="M5 12h14M12 5l7 7-7 7"/>
                         </svg>
@@ -81,6 +81,9 @@
                 </form>
 
                 <p class="warning">If you forget this password, your data is permanently lost. There is no recovery mechanism.</p>
+                <div class="auth-footer-text">
+                    Already have an account? <a href="/login" class="auth-link">Log in</a>
+                </div>
             </div>
         </div>
     </div>
@@ -108,7 +111,7 @@
             btnText.textContent = 'Initializing...';
 
             try {
-                const resp = await fetch('/api/init', {
+                const resp = await fetch('/api/register', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({username, password: pw}),
@@ -127,7 +130,7 @@
                 errorEl.textContent = 'Connection error.';
             } finally {
                 btn.disabled = false;
-                btnText.textContent = 'Initialize Vault';
+                btnText.textContent = 'Create Account';
             }
         });
     </script>

@@ -74,14 +74,22 @@ class Session:
         self._timeout = seconds
 
 
+@dataclass
+class SessionEntry:
+    """Session bound to a specific user."""
+    user_id: str
+    session: Session
+
+
 class SessionStore:
-    """Per-client session store for the web server. Maps tokens -> DerivedKeys."""
+    """Per-client session store for the web server. Maps tokens -> (user_id, Session)."""
 
     def __init__(self) -> None:
-        self._sessions: dict[str, Session] = {}
+        self._entries: dict[str, SessionEntry] = {}
+        self._timeout: int = DEFAULT_TIMEOUT_SECONDS
+        # Legacy single-user fields (kept for backward compat with CLI)
         self._salt: Optional[bytes] = None
         self._verification_token: Optional[bytes] = None
-        self._timeout: int = DEFAULT_TIMEOUT_SECONDS
         self._username: Optional[str] = None
 
     def configure(self, salt: bytes, verification_token: bytes,
@@ -105,55 +113,78 @@ class SessionStore:
         self._username = value
 
     def unlock(self, password: str, username: Optional[str] = None) -> Optional[str]:
-        """Verify credentials, create a new client session, return the token (or None)."""
+        """Legacy single-user unlock. Use unlock_user() for multi-user."""
         if self._salt is None or self._verification_token is None:
             raise RuntimeError("SessionStore not configured.")
-
         if self._username and username != self._username:
             return None
-
         keys = verify_password_and_derive_keys(password, self._salt, self._verification_token)
         if keys is None:
             return None
-
         token = secrets.token_urlsafe(SESSION_TOKEN_BYTES)
         client = Session()
         client.configure(self._salt, self._verification_token, self._timeout)
         client._keys = keys
         client._locked = False
         client._touch()
-        self._sessions[token] = client
+        self._entries[token] = SessionEntry(user_id="__legacy__", session=client)
+        return token
+
+    def unlock_user(self, user_id: str, password: str,
+                    salt: bytes, verification_token: bytes) -> Optional[str]:
+        """Multi-user unlock: verify password against user-specific salt/token."""
+        keys = verify_password_and_derive_keys(password, salt, verification_token)
+        if keys is None:
+            return None
+        token = secrets.token_urlsafe(SESSION_TOKEN_BYTES)
+        client = Session()
+        client.configure(salt, verification_token, self._timeout)
+        client._keys = keys
+        client._locked = False
+        client._touch()
+        self._entries[token] = SessionEntry(user_id=user_id, session=client)
         return token
 
     def get(self, token: Optional[str]) -> Optional[Session]:
         if not token:
             return None
-        client = self._sessions.get(token)
-        if client is None:
+        entry = self._entries.get(token)
+        if entry is None:
             return None
-        if client.is_locked:
-            del self._sessions[token]
+        if entry.session.is_locked:
+            del self._entries[token]
             return None
-        return client
+        return entry.session
+
+    def get_user_id(self, token: Optional[str]) -> Optional[str]:
+        if not token:
+            return None
+        entry = self._entries.get(token)
+        if entry is None:
+            return None
+        if entry.session.is_locked:
+            del self._entries[token]
+            return None
+        return entry.user_id
 
     def lock(self, token: str) -> None:
-        client = self._sessions.get(token)
-        if client:
-            client.lock()
-            del self._sessions[token]
+        entry = self._entries.get(token)
+        if entry:
+            entry.session.lock()
+            del self._entries[token]
 
     def destroy(self, token: str) -> None:
-        client = self._sessions.pop(token, None)
-        if client:
-            client.lock()
+        entry = self._entries.pop(token, None)
+        if entry:
+            entry.session.lock()
 
     def lock_all(self) -> None:
-        for client in self._sessions.values():
-            client.lock()
-        self._sessions.clear()
+        for entry in self._entries.values():
+            entry.session.lock()
+        self._entries.clear()
 
     def active_count(self) -> int:
-        return len(self._sessions)
+        return len(self._entries)
 
 
 session_store = SessionStore()

@@ -1,7 +1,9 @@
 """
 FastAPI application — serves the web UI and API endpoints.
 
-Uses per-client cookie-based sessions for security isolation.
+Multi-user: each user gets an isolated vault directory with separate DB,
+files, and vector store. A central user registry (users.db) manages accounts.
+Per-user VaultAgent instances are lazily created and cached in an AgentPool.
 """
 
 from __future__ import annotations
@@ -23,16 +25,19 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from vault.agent import VaultAgent
+from vault.agent_pool import AgentPool
 from vault.config import VaultConfig, config
 from vault.security.encryption import derive_all_keys, generate_verification_token
 from vault.security.session import Session, session_store
+from vault.users import UserRegistry
 
 logger = logging.getLogger(__name__)
 
 COOKIE_NAME = "vault_sid"
 COOKIE_MAX_AGE = 86400  # 24 hours
 
-agent: Optional[VaultAgent] = None
+user_registry: Optional[UserRegistry] = None
+agent_pool: Optional[AgentPool] = None
 
 _unlock_attempts: dict[str, list[float]] = defaultdict(list)
 UNLOCK_RATE_LIMIT = 5
@@ -67,6 +72,20 @@ def _require_session(request: Request) -> Session:
     return s
 
 
+def _get_user_agent(request: Request) -> tuple[Session, VaultAgent]:
+    """Resolve the authenticated user's session and their dedicated VaultAgent."""
+    s = _require_session(request)
+    token = request.cookies.get(COOKIE_NAME)
+    user_id = session_store.get_user_id(token)
+    if not user_id or not user_registry or not agent_pool:
+        raise HTTPException(500, "Server not ready")
+    user = user_registry.get_by_id(user_id)
+    if not user:
+        raise HTTPException(401, "User not found")
+    ag = agent_pool.get(user, s)
+    return s, ag
+
+
 def _set_cookie(response: Response, token: str) -> Response:
     is_secure = os.environ.get("VAULT_INSECURE") != "1"
     response.set_cookie(
@@ -85,40 +104,22 @@ def _clear_cookie(response: Response) -> Response:
     return response
 
 
-def _load_username() -> Optional[str]:
-    """Load username from database meta table if set."""
-    if agent and agent.db._conn:
-        try:
-            row = agent.db._conn.execute(
-                "SELECT value FROM meta WHERE key = 'username'"
-            ).fetchone()
-            return row["value"] if row else None
-        except Exception:
-            return None
-    return None
-
-
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    global agent
-    dummy_session = Session()
-    if config.salt_path.exists():
-        salt = config.salt_path.read_bytes()
-        token = config.token_path.read_bytes()
-        dummy_session.configure(salt, token, config.session_timeout)
-        session_store.configure(salt, token, config.session_timeout)
+    global user_registry, agent_pool
 
-    agent = VaultAgent(config, dummy_session)
-    agent.initialize()
+    user_registry = UserRegistry(config.vault_dir)
+    user_registry.open()
 
-    username = _load_username()
-    if username:
-        session_store.username = username
+    agent_pool = AgentPool(config)
+    session_store._timeout = config.session_timeout
 
-    logger.info("Vault agent initialized")
+    logger.info("Vault multi-user server started (%d users)", user_registry.user_count())
     yield
-    if agent:
-        agent.shutdown()
+    if agent_pool:
+        agent_pool.shutdown_all()
+    if user_registry:
+        user_registry.close()
 
 
 app = FastAPI(title="Vault", lifespan=lifespan)
@@ -147,35 +148,30 @@ templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
-    initialized = config.salt_path.exists()
-    if not initialized:
-        return RedirectResponse("/setup", status_code=302)
     s = _get_session(request)
-    if s is None:
-        return RedirectResponse("/login", status_code=302)
-    return RedirectResponse("/app", status_code=302)
+    if s is not None:
+        return RedirectResponse("/app", status_code=302)
+    return RedirectResponse("/login", status_code=302)
 
 
-@app.get("/setup", response_class=HTMLResponse)
-async def setup_page(request: Request):
-    if config.salt_path.exists():
-        return RedirectResponse("/login", status_code=302)
+@app.get("/signup", response_class=HTMLResponse)
+async def signup_page(request: Request):
+    s = _get_session(request)
+    if s is not None:
+        return RedirectResponse("/app", status_code=302)
     return templates.TemplateResponse("setup.html", {"request": request})
 
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
-    if not config.salt_path.exists():
-        return RedirectResponse("/setup", status_code=302)
     s = _get_session(request)
     if s is not None:
         return RedirectResponse("/app", status_code=302)
-    has_username = session_store.username is not None
     mode = request.query_params.get("mode", "")
-    password_only = (mode == "lock") and has_username
+    password_only = mode == "lock"
     return templates.TemplateResponse("unlock.html", {
         "request": request,
-        "has_username": has_username,
+        "has_username": True,
         "password_only": password_only,
     })
 
@@ -183,8 +179,6 @@ async def login_page(request: Request):
 @app.get("/app", response_class=HTMLResponse)
 @app.get("/app/{path:path}", response_class=HTMLResponse)
 async def app_page(request: Request, path: str = ""):
-    if not config.salt_path.exists():
-        return RedirectResponse("/setup", status_code=302)
     s = _get_session(request)
     if s is None:
         return RedirectResponse("/login", status_code=302)
@@ -193,68 +187,62 @@ async def app_page(request: Request, path: str = ""):
 
 # ===== API Endpoints =====
 
-@app.post("/api/init")
-async def api_init(request: Request):
+@app.post("/api/register")
+async def api_register(request: Request):
+    """Create a new user account with isolated vault."""
+    if not user_registry:
+        raise HTTPException(500, "Server not ready")
     data = await request.json()
     password = data.get("password", "")
     username = data.get("username", "").strip()
+    email = data.get("email", "").strip()
+    if not username or len(username) < 3:
+        raise HTTPException(400, "Username must be at least 3 characters")
     if len(password) < 8:
         raise HTTPException(400, "Password must be at least 8 characters")
 
     keys = derive_all_keys(password)
-    token = generate_verification_token(password, keys.salt)
+    verification_token = generate_verification_token(password, keys.salt)
 
-    config.ensure_dirs()
-    config.salt_path.write_bytes(keys.salt)
-    config.token_path.write_bytes(token)
-    config.save()
+    try:
+        user = user_registry.create_user(username, email, keys.salt, verification_token)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
 
-    session_store.configure(keys.salt, token, config.session_timeout, username=username or None)
-
-    global agent
-    dummy = Session()
-    dummy.configure(keys.salt, token, config.session_timeout)
-    if agent:
-        agent.shutdown()
-    agent = VaultAgent(config, dummy)
-    agent.initialize()
-
-    if username:
-        agent.db._conn.execute(
-            "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
-            ("username", username),
-        )
-        agent.db._conn.commit()
-
-    sid = session_store.unlock(password, username=username or None)
+    sid = session_store.unlock_user(user.user_id, password, user.salt, user.verification_token)
     if not sid:
-        raise HTTPException(500, "Failed to create session after init")
+        raise HTTPException(500, "Failed to create session after registration")
 
-    response = JSONResponse({"status": "ok", "message": "Vault initialized successfully"})
+    response = JSONResponse({"status": "ok", "message": "Account created successfully"})
     _set_cookie(response, sid)
     return response
 
 
+@app.post("/api/init")
+async def api_init(request: Request):
+    """Backward-compatible alias for /api/register."""
+    return await api_register(request)
+
+
 @app.post("/api/unlock")
 async def api_unlock(request: Request):
+    if not user_registry:
+        raise HTTPException(500, "Server not ready")
     client_ip = request.client.host if request.client else "unknown"
     if _check_rate_limit(client_ip):
         raise HTTPException(429, "Too many unlock attempts. Try again in a minute.")
 
     data = await request.json()
     password = data.get("password", "")
-    username = data.get("username", "").strip() or None
+    username = data.get("username", "").strip()
+    if not username:
+        raise HTTPException(400, "Username is required")
 
-    if not config.salt_path.exists():
-        raise HTTPException(400, "Vault not initialized")
+    user = user_registry.get_by_username(username)
+    if not user:
+        raise HTTPException(401, "Incorrect credentials")
 
-    if not session_store.is_configured:
-        salt = config.salt_path.read_bytes()
-        tok = config.token_path.read_bytes()
-        stored_user = _load_username()
-        session_store.configure(salt, tok, config.session_timeout, username=stored_user)
-
-    sid = session_store.unlock(password, username=username)
+    sid = session_store.unlock_user(user.user_id, password, user.salt, user.verification_token)
     if sid:
         _unlock_attempts.pop(client_ip, None)
         response = JSONResponse({"status": "ok"})
@@ -288,9 +276,9 @@ async def api_logout(request: Request):
 async def api_status(request: Request):
     s = _get_session(request)
     return {
-        "initialized": config.salt_path.exists(),
+        "initialized": True,
         "locked": s is None,
-        "has_username": session_store.username is not None,
+        "has_username": True,
         "paranoid_mode": config.paranoid_mode,
         "active_sessions": session_store.active_count(),
     }
@@ -302,9 +290,7 @@ async def api_upload_preview(
     file: UploadFile = File(...),
 ):
     """Extract metadata and suggest a name without storing anything."""
-    _require_session(request)
-    if not agent:
-        raise HTTPException(500, "Agent not initialized")
+    s, agent = _get_user_agent(request)
 
     file_data = await file.read()
     file_name = file.filename or "unknown"
@@ -346,9 +332,7 @@ async def api_chat(
     file: Optional[UploadFile] = File(None),
     force: bool = Form(False),
 ):
-    if not agent:
-        raise HTTPException(500, "Agent not initialized")
-    s = _require_session(request)
+    s, agent = _get_user_agent(request)
 
     file_data = None
     file_name = None
@@ -370,7 +354,7 @@ async def api_chat(
         if response.data and response.data.get("create_share_for_doc_id"):
             try:
                 share_path, _token, expires_in = _create_share_link_for_doc(
-                    request, response.data["create_share_for_doc_id"], s
+                    request, response.data["create_share_for_doc_id"], s, agent
                 )
                 result["share_path"] = share_path
                 result["share_expires_in"] = expires_in
@@ -393,16 +377,23 @@ async def api_chat(
 
 @app.post("/api/change-password")
 async def api_change_password(request: Request):
-    s = _require_session(request)
+    s, agent = _get_user_agent(request)
+    token = request.cookies.get(COOKIE_NAME)
+    user_id = session_store.get_user_id(token)
+    if not user_id or not user_registry:
+        raise HTTPException(500, "Server not ready")
+    user = user_registry.get_by_id(user_id)
+    if not user:
+        raise HTTPException(401, "User not found")
+
     data = await request.json()
     current = data.get("current_password", "")
     new_pw = data.get("new_password", "")
     if len(new_pw) < 8:
         raise HTTPException(400, "New password must be at least 8 characters")
 
-    salt = config.salt_path.read_bytes()
     from vault.security.encryption import verify_password
-    if not verify_password(current, salt, config.token_path.read_bytes()):
+    if not verify_password(current, user.salt, user.verification_token):
         raise HTTPException(401, "Current password is incorrect")
 
     new_keys = derive_all_keys(new_pw)
@@ -438,14 +429,22 @@ async def api_change_password(request: Request):
         )
         agent.db.delete_fact(fact["id"])
 
-    config.salt_path.write_bytes(new_keys.salt)
-    config.token_path.write_bytes(new_token)
+    salt_path = user.vault_dir / "data" / ".salt"
+    token_path = user.vault_dir / "data" / ".verify_token"
+    salt_path.write_bytes(new_keys.salt)
+    token_path.write_bytes(new_token)
 
-    stored_user = _load_username()
-    session_store.lock_all()
-    session_store.configure(new_keys.salt, new_token, config.session_timeout, username=stored_user)
+    if user_registry._conn:
+        user_registry._conn.execute(
+            "UPDATE users SET salt = ?, verify_token = ? WHERE user_id = ?",
+            (new_keys.salt, new_token, user_id),
+        )
+        user_registry._conn.commit()
 
-    sid = session_store.unlock(new_pw, username=stored_user)
+    if agent_pool:
+        agent_pool.evict(user_id)
+
+    sid = session_store.unlock_user(user_id, new_pw, new_keys.salt, new_token)
     response = JSONResponse({"status": "ok", "message": "Password changed. All data re-encrypted."})
     if sid:
         _set_cookie(response, sid)
@@ -454,10 +453,10 @@ async def api_change_password(request: Request):
 
 @app.post("/api/backup")
 async def api_backup(request: Request):
-    _require_session(request)
+    s, agent = _get_user_agent(request)
     try:
         from vault.backup import create_backup
-        backup_path = create_backup(config)
+        backup_path = create_backup(agent.config)
         return {"status": "ok", "path": str(backup_path)}
     except Exception as e:
         raise HTTPException(500, str(e))
@@ -468,9 +467,7 @@ async def api_backup(request: Request):
 @app.post("/api/reindex")
 async def api_reindex(request: Request):
     """Re-process all existing documents to extract and store rich metadata."""
-    s = _require_session(request)
-    if not agent or not agent.db._conn:
-        raise HTTPException(500, "Database not available")
+    s, agent = _get_user_agent(request)
 
     from vault.processors.document import extract_document_metadata, guess_category
 
@@ -536,11 +533,10 @@ async def api_reindex(request: Request):
 
 @app.get("/api/db-viewer")
 async def api_db_viewer_summary(request: Request):
-    _require_session(request)
-    if not agent or not agent.db._conn:
-        raise HTTPException(500, "Database not available")
-
+    s, agent = _get_user_agent(request)
     conn = agent.db._conn
+    if not conn:
+        raise HTTPException(500, "Database not available")
     tables = {}
     for tbl in ["meta", "documents", "credentials", "facts"]:
         count = conn.execute(f"SELECT COUNT(*) as c FROM {tbl}").fetchone()["c"]
@@ -552,9 +548,7 @@ async def api_db_viewer_summary(request: Request):
 
 @app.get("/api/db-viewer/{table}")
 async def api_db_viewer_table(request: Request, table: str):
-    s = _require_session(request)
-    if not agent or not agent.db._conn:
-        raise HTTPException(500, "Database not available")
+    s, agent = _get_user_agent(request)
     if table not in ("meta", "documents", "credentials", "facts"):
         raise HTTPException(400, "Invalid table name")
 
@@ -589,9 +583,7 @@ async def api_db_viewer_table(request: Request, table: str):
 
 @app.get("/api/expiry-alerts")
 async def api_expiry_alerts(request: Request):
-    s = _require_session(request)
-    if not agent or not agent.db._conn:
-        raise HTTPException(500, "Database not available")
+    s, agent = _get_user_agent(request)
 
     from datetime import datetime, timedelta
 
@@ -637,11 +629,10 @@ async def api_expiry_alerts(request: Request):
 
 @app.get("/api/stats")
 async def api_stats(request: Request):
-    s = _require_session(request)
-    if not agent or not agent.db._conn:
-        raise HTTPException(500, "Database not available")
-
+    s, agent = _get_user_agent(request)
     conn = agent.db._conn
+    if not conn:
+        raise HTTPException(500, "Database not available")
     doc_count = conn.execute("SELECT COUNT(*) as c FROM documents").fetchone()["c"]
     cred_count = conn.execute("SELECT COUNT(*) as c FROM credentials").fetchone()["c"]
     fact_count = conn.execute("SELECT COUNT(*) as c FROM facts").fetchone()["c"]
@@ -699,9 +690,7 @@ async def api_stats(request: Request):
 
 @app.get("/api/documents")
 async def api_list_documents(request: Request):
-    s = _require_session(request)
-    if not agent or not agent.db._conn:
-        raise HTTPException(500, "Database not available")
+    s, agent = _get_user_agent(request)
     docs = agent.db.list_documents(s.keys.db_key)
     return {"documents": [{
         "id": d["id"], "name": d["name"], "category": d["category"],
@@ -713,9 +702,7 @@ async def api_list_documents(request: Request):
 
 @app.get("/api/credentials")
 async def api_list_credentials(request: Request):
-    s = _require_session(request)
-    if not agent or not agent.db._conn:
-        raise HTTPException(500, "Database not available")
+    s, agent = _get_user_agent(request)
     creds = agent.db.list_credentials(s.keys.cred_key)
     return {"credentials": [{
         "id": c["id"], "service": c["service"],
@@ -727,9 +714,7 @@ async def api_list_credentials(request: Request):
 
 @app.get("/api/facts")
 async def api_list_facts(request: Request):
-    s = _require_session(request)
-    if not agent or not agent.db._conn:
-        raise HTTPException(500, "Database not available")
+    s, agent = _get_user_agent(request)
     facts = agent.db.list_facts(s.keys.db_key)
     return {"facts": [{
         "id": f["id"], "category": f.get("category", "general"),
@@ -740,9 +725,7 @@ async def api_list_facts(request: Request):
 
 @app.get("/api/reminders")
 async def api_list_reminders(request: Request):
-    s = _require_session(request)
-    if not agent or not agent.db._conn:
-        raise HTTPException(500, "Database not available")
+    s, agent = _get_user_agent(request)
     reminders = agent.db.list_reminders(s.keys.db_key)
     from datetime import datetime as _dt
     today = _dt.now().date()
@@ -767,9 +750,7 @@ async def api_list_reminders(request: Request):
 
 @app.post("/api/reminders")
 async def api_create_reminder(request: Request):
-    s = _require_session(request)
-    if not agent or not agent.db._conn:
-        raise HTTPException(500, "Database not available")
+    s, agent = _get_user_agent(request)
     body = await request.json()
     title = body.get("title", "")
     due_date = body.get("due_date", "")
@@ -786,9 +767,7 @@ async def api_create_reminder(request: Request):
 
 @app.delete("/api/reminders/{rem_id}")
 async def api_delete_reminder(request: Request, rem_id: str):
-    s = _require_session(request)
-    if not agent or not agent.db._conn:
-        raise HTTPException(500, "Database not available")
+    s, agent = _get_user_agent(request)
     if agent.db.delete_reminder(rem_id):
         return {"status": "deleted"}
     raise HTTPException(404, "Reminder not found")
@@ -796,9 +775,7 @@ async def api_delete_reminder(request: Request, rem_id: str):
 
 @app.post("/api/reminders/{rem_id}/complete")
 async def api_complete_reminder(request: Request, rem_id: str):
-    s = _require_session(request)
-    if not agent or not agent.db._conn:
-        raise HTTPException(500, "Database not available")
+    s, agent = _get_user_agent(request)
     if agent.db.complete_reminder(rem_id):
         return {"status": "completed"}
     raise HTTPException(404, "Reminder not found")
@@ -817,15 +794,8 @@ def _cleanup_expired_tokens() -> None:
         del _share_tokens[t]
 
 
-def _create_share_link_for_doc(request: Request, doc_id: str, s: Session) -> tuple[str, str, int]:
-    """Create a temporary share link for a document; return (share_path, token, expires_in).
-
-    Returns a relative path (/api/share/{token}) so the frontend can prepend
-    window.location.origin. This avoids broken URLs when behind a reverse proxy
-    (e.g. Caddy) where request.base_url resolves to the internal Docker hostname.
-    """
-    if not agent or not agent.db._conn:
-        raise HTTPException(500, "Database not available")
+def _create_share_link_for_doc(request: Request, doc_id: str, s: Session, agent: VaultAgent) -> tuple[str, str, int]:
+    """Create a temporary share link for a document; return (share_path, token, expires_in)."""
     doc = agent.db.get_document(doc_id, s.keys.db_key)
     if not doc:
         raise HTTPException(404, "Document not found")
@@ -847,12 +817,12 @@ def _create_share_link_for_doc(request: Request, doc_id: str, s: Session) -> tup
 @app.post("/api/share/create")
 async def api_share_create(request: Request):
     """Create a temporary share link for a document."""
-    s = _require_session(request)
+    s, agent = _get_user_agent(request)
     body = await request.json()
     doc_id = body.get("doc_id", "")
     if not doc_id:
         raise HTTPException(400, "doc_id required")
-    share_path, token, expires_in = _create_share_link_for_doc(request, doc_id, s)
+    share_path, token, expires_in = _create_share_link_for_doc(request, doc_id, s, agent)
     return {"share_path": share_path, "token": token, "expires_in": expires_in}
 
 
@@ -874,10 +844,7 @@ async def api_share_download(token: str):
 @app.post("/api/share/email")
 async def api_share_email(request: Request):
     """Send a document as email attachment via SMTP."""
-    s = _require_session(request)
-    if not agent or not agent.db._conn:
-        raise HTTPException(500, "Database not available")
-
+    s, agent = _get_user_agent(request)
     cfg = agent.config
     if not cfg.smtp_host or not cfg.smtp_user:
         raise HTTPException(400, "SMTP not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASSWORD, SMTP_FROM environment variables.")
@@ -926,9 +893,7 @@ async def api_share_email(request: Request):
 
 @app.delete("/api/documents/{doc_id}")
 async def api_delete_document(request: Request, doc_id: str):
-    s = _require_session(request)
-    if not agent or not agent.db._conn:
-        raise HTTPException(500, "Database not available")
+    s, agent = _get_user_agent(request)
 
     doc = agent.db.get_document(doc_id, s.keys.db_key)
     if not doc:
@@ -944,9 +909,7 @@ async def api_delete_document(request: Request, doc_id: str):
 
 @app.delete("/api/credentials/{cred_id}")
 async def api_delete_credential(request: Request, cred_id: str):
-    s = _require_session(request)
-    if not agent or not agent.db._conn:
-        raise HTTPException(500, "Database not available")
+    s, agent = _get_user_agent(request)
 
     creds = agent.db.list_credentials(s.keys.cred_key)
     cred = next((c for c in creds if c["id"] == cred_id), None)
@@ -959,9 +922,7 @@ async def api_delete_credential(request: Request, cred_id: str):
 
 @app.delete("/api/facts/{fact_id}")
 async def api_delete_fact(request: Request, fact_id: str):
-    s = _require_session(request)
-    if not agent or not agent.db._conn:
-        raise HTTPException(500, "Database not available")
+    s, agent = _get_user_agent(request)
 
     facts = agent.db.list_facts(s.keys.db_key)
     fact = next((f for f in facts if f["id"] == fact_id), None)
@@ -974,9 +935,7 @@ async def api_delete_fact(request: Request, fact_id: str):
 
 @app.get("/api/birthdays")
 async def api_birthdays(request: Request):
-    s = _require_session(request)
-    if not agent or not agent.db._conn:
-        raise HTTPException(500, "Database not available")
+    s, agent = _get_user_agent(request)
 
     from datetime import datetime
 

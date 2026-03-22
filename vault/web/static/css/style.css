@@ -363,9 +363,18 @@ h1, h2, h3 { font-family: var(--font-display); letter-spacing: -0.03em; }
     padding-top: 1.5rem;
     border-top: 1px solid rgba(255,255,255,0.04);
     color: var(--text-3);
-    font-size: 0.72rem;
+    font-size: 0.78rem;
     font-weight: 400;
+    text-align: center;
 }
+
+.auth-link {
+    color: var(--accent);
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.auth-link:hover { text-decoration: underline; }
 
 /* ===== Auth Typography ===== */
 .auth-title {
