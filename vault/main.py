@@ -167,7 +167,7 @@ async def root(request: Request):
     s = _get_session(request)
     if s is not None:
         return RedirectResponse("/app", status_code=302)
-    return RedirectResponse("/login", status_code=302)
+    return templates.TemplateResponse("landing.html", {"request": request})
 
 
 @app.get("/signup", response_class=HTMLResponse)
@@ -983,6 +983,47 @@ async def api_birthdays(request: Request):
 
     result.sort(key=lambda x: (x["days_until"] if x["days_until"] is not None else 9999))
     return {"birthdays": result}
+
+
+# ===== Usage Metering =====
+
+@app.get("/api/usage")
+async def api_usage(request: Request):
+    """Return storage usage for the current user."""
+    s, agent = _get_user_agent(request)
+    token = request.cookies.get(COOKIE_NAME)
+    user_id = session_store.get_user_id(token)
+    if not user_id or not user_registry:
+        raise HTTPException(500, "Server not ready")
+    user = user_registry.get_by_id(user_id)
+    if not user:
+        raise HTTPException(401, "User not found")
+
+    vault_dir = user.vault_dir
+    total_bytes = 0
+    file_count = 0
+    for f in (vault_dir / "data" / "files").glob("*"):
+        if f.is_file():
+            total_bytes += f.stat().st_size
+            file_count += 1
+
+    db_path = vault_dir / "data" / "vault.db"
+    db_size = db_path.stat().st_size if db_path.exists() else 0
+
+    conn = agent.db._conn
+    doc_count = conn.execute("SELECT COUNT(*) as c FROM documents").fetchone()["c"] if conn else 0
+    cred_count = conn.execute("SELECT COUNT(*) as c FROM credentials").fetchone()["c"] if conn else 0
+    fact_count = conn.execute("SELECT COUNT(*) as c FROM facts").fetchone()["c"] if conn else 0
+
+    return {
+        "storage_bytes": total_bytes + db_size,
+        "storage_mb": round((total_bytes + db_size) / (1024 * 1024), 2),
+        "files": file_count,
+        "documents": doc_count,
+        "credentials": cred_count,
+        "facts": fact_count,
+        "username": user.username,
+    }
 
 
 # ===== Admin Endpoints =====
