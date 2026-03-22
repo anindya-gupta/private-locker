@@ -35,10 +35,13 @@ logger = logging.getLogger(__name__)
 
 COOKIE_NAME = "vault_sid"
 COOKIE_MAX_AGE = 86400  # 24 hours
+ADMIN_KEY = os.environ.get("VAULT_ADMIN_KEY", "")
+INVITE_ONLY = os.environ.get("VAULT_INVITE_ONLY", "").lower() in ("1", "true", "yes")
 
 user_registry: Optional[UserRegistry] = None
 agent_pool: Optional[AgentPool] = None
 
+_invite_codes: set[str] = set()
 _unlock_attempts: dict[str, list[float]] = defaultdict(list)
 UNLOCK_RATE_LIMIT = 5
 UNLOCK_RATE_WINDOW = 60
@@ -124,6 +127,19 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(title="Vault", lifespan=lifespan)
 
+from fastapi.middleware.cors import CORSMiddleware
+
+allowed_origins = os.environ.get("VAULT_CORS_ORIGINS", "").split(",")
+allowed_origins = [o.strip() for o in allowed_origins if o.strip()]
+if allowed_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
@@ -196,6 +212,13 @@ async def api_register(request: Request):
     password = data.get("password", "")
     username = data.get("username", "").strip()
     email = data.get("email", "").strip()
+    invite_code = data.get("invite_code", "").strip()
+
+    if INVITE_ONLY:
+        if not invite_code or invite_code not in _invite_codes:
+            raise HTTPException(403, "Registration requires a valid invite code")
+        _invite_codes.discard(invite_code)
+
     if not username or len(username) < 3:
         raise HTTPException(400, "Username must be at least 3 characters")
     if len(password) < 8:
@@ -281,6 +304,7 @@ async def api_status(request: Request):
         "has_username": True,
         "paranoid_mode": config.paranoid_mode,
         "active_sessions": session_store.active_count(),
+        "invite_only": INVITE_ONLY,
     }
 
 
@@ -959,3 +983,46 @@ async def api_birthdays(request: Request):
 
     result.sort(key=lambda x: (x["days_until"] if x["days_until"] is not None else 9999))
     return {"birthdays": result}
+
+
+# ===== Admin Endpoints =====
+
+def _require_admin(request: Request) -> None:
+    if not ADMIN_KEY:
+        raise HTTPException(403, "Admin API disabled. Set VAULT_ADMIN_KEY environment variable.")
+    key = request.headers.get("X-Admin-Key", "")
+    if not secrets.compare_digest(key, ADMIN_KEY):
+        raise HTTPException(403, "Invalid admin key")
+
+
+@app.get("/api/admin/users")
+async def admin_list_users(request: Request):
+    _require_admin(request)
+    if not user_registry:
+        raise HTTPException(500, "Server not ready")
+    users = user_registry.list_users()
+    return {"users": [
+        {"user_id": u.user_id, "username": u.username, "email": u.email, "created_at": u.created_at}
+        for u in users
+    ]}
+
+
+@app.post("/api/admin/invite")
+async def admin_create_invite(request: Request):
+    """Generate a one-time invite code for new user registration."""
+    _require_admin(request)
+    code = secrets.token_urlsafe(16)
+    _invite_codes.add(code)
+    return {"invite_code": code}
+
+
+@app.get("/api/admin/stats")
+async def admin_stats(request: Request):
+    _require_admin(request)
+    if not user_registry:
+        raise HTTPException(500, "Server not ready")
+    return {
+        "total_users": user_registry.user_count(),
+        "active_sessions": session_store.active_count(),
+        "invite_only": INVITE_ONLY,
+    }

@@ -12,6 +12,10 @@ services:
       - SMTP_USER=${SMTP_USER:-}
       - SMTP_PASSWORD=${SMTP_PASSWORD:-}
       - SMTP_FROM=${SMTP_FROM:-}
+      - VAULT_ADMIN_KEY=${VAULT_ADMIN_KEY:-}
+      - VAULT_INVITE_ONLY=${VAULT_INVITE_ONLY:-}
+      - VAULT_CORS_ORIGINS=${VAULT_CORS_ORIGINS:-}
+      - QDRANT_URL=${QDRANT_URL:-}
     expose:
       - "8080"
 
