@@ -64,6 +64,7 @@
     loadBirthdays();
     loadExpiryAlerts();
     loadReminders();
+    loadSharedInbox();
 
     function isExpiryDismissedToday() {
         const dismissed = localStorage.getItem('expiry_widget_closed');
@@ -229,6 +230,54 @@
             widget.style.display = '';
             widget.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }
+    });
+
+    async function loadSharedInbox() {
+        const widget = $('#inbox-widget');
+        const list = $('#inbox-list');
+        if (!widget || !list) return;
+        try {
+            const resp = await fetch('/api/share/inbox');
+            if (!resp.ok) return;
+            const data = await resp.json();
+            const shares = data.shares || [];
+            if (!shares.length) { widget.style.display = 'none'; return; }
+            widget.style.display = '';
+            list.innerHTML = shares.map(s => `
+                <div class="reminder-item" data-share-id="${s.share_id}">
+                    <div class="reminder-info">
+                        <span class="reminder-title">${s.doc_name}</span>
+                        <span class="reminder-due">from <strong>${s.from_user}</strong></span>
+                    </div>
+                    <button class="btn-small btn-primary accept-share-btn" data-id="${s.share_id}">Accept</button>
+                </div>
+            `).join('');
+            list.querySelectorAll('.accept-share-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    btn.disabled = true;
+                    btn.textContent = 'Importing...';
+                    try {
+                        const r = await fetch(`/api/share/accept/${btn.dataset.id}`, { method: 'POST' });
+                        if (r.ok) {
+                            showToast('Document imported!', 'success');
+                            btn.closest('.reminder-item').remove();
+                            if (!list.children.length) widget.style.display = 'none';
+                        } else {
+                            const err = await r.json().catch(() => ({}));
+                            showToast(err.detail || 'Failed to accept', 'error');
+                            btn.disabled = false;
+                            btn.textContent = 'Accept';
+                        }
+                    } catch { showToast('Failed', 'error'); btn.disabled = false; btn.textContent = 'Accept'; }
+                });
+            });
+        } catch {}
+    }
+
+    const inboxCloseBtn = $('#inbox-close');
+    if (inboxCloseBtn) inboxCloseBtn.addEventListener('click', () => {
+        const widget = $('#inbox-widget');
+        if (widget) { widget.style.display = 'none'; }
     });
 
     async function loadBirthdays() {
@@ -442,7 +491,7 @@
         if (viewName === 'credentials') loadCredentials();
         if (viewName === 'memory') loadMemory();
         if (viewName === 'database') loadDatabase();
-        if (viewName === 'chat') { loadStats(); loadBirthdays(); loadExpiryAlerts(); loadReminders(); }
+        if (viewName === 'chat') { loadStats(); loadBirthdays(); loadExpiryAlerts(); loadReminders(); loadSharedInbox(); }
     }
 
     // Restore view from current URL
@@ -1206,6 +1255,39 @@
             showToast('Link copied! Expires in 10 min.', 'success');
         } catch { showToast('Failed to copy link', 'error'); }
         finally { shareCopyBtn.disabled = false; }
+    });
+
+    const shareUserBtn = $('#share-user');
+    if (shareUserBtn) shareUserBtn.addEventListener('click', () => {
+        const userForm = $('#share-user-form');
+        const emailForm = $('#share-email-form');
+        if (emailForm) emailForm.style.display = 'none';
+        userForm.style.display = userForm.style.display === 'none' ? 'flex' : 'none';
+        if (userForm.style.display !== 'none') $('#share-username-input').focus();
+    });
+
+    const shareUserSendBtn = $('#share-user-send');
+    if (shareUserSendBtn) shareUserSendBtn.addEventListener('click', async () => {
+        const username = ($('#share-username-input').value || '').trim();
+        if (!username || !_shareDocId) return;
+        shareUserSendBtn.disabled = true;
+        shareUserSendBtn.textContent = 'Sharing...';
+        try {
+            const resp = await fetch('/api/share/user', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ doc_id: _shareDocId, to_username: username }),
+            });
+            if (resp.ok) {
+                showToast(`Shared with ${username}!`, 'success');
+                $('#share-username-input').value = '';
+                $('#share-user-form').style.display = 'none';
+            } else {
+                const err = await resp.json().catch(() => ({}));
+                showToast(err.detail || 'Failed to share', 'error');
+            }
+        } catch { showToast('Failed to share', 'error'); }
+        finally { shareUserSendBtn.disabled = false; shareUserSendBtn.textContent = 'Share'; }
     });
 
     async function loadCredentials() {

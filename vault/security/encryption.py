@@ -14,6 +14,8 @@ from enum import Enum
 from typing import Optional
 
 from argon2.low_level import Type, hash_secret_raw
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 SALT_LENGTH = 32
@@ -140,3 +142,46 @@ def verify_password_and_derive_keys(password: str, salt: bytes, token: bytes) ->
         return None
     except Exception:
         return None
+
+
+# ===== RSA Key Pairs for Cross-User Sharing =====
+
+def generate_rsa_keypair() -> tuple[bytes, bytes]:
+    """Generate an RSA-2048 key pair. Returns (private_pem, public_pem)."""
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    public_pem = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    return private_pem, public_pem
+
+
+def rsa_encrypt(plaintext: bytes, public_pem: bytes) -> bytes:
+    """Encrypt data with an RSA public key (OAEP + SHA-256)."""
+    public_key = serialization.load_pem_public_key(public_pem)
+    return public_key.encrypt(
+        plaintext,
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None,
+        ),
+    )
+
+
+def rsa_decrypt(ciphertext: bytes, private_pem: bytes) -> bytes:
+    """Decrypt data with an RSA private key."""
+    private_key = serialization.load_pem_private_key(private_pem, password=None)
+    return private_key.decrypt(
+        ciphertext,
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None,
+        ),
+    )

@@ -1026,6 +1026,123 @@ async def api_usage(request: Request):
     }
 
 
+# ===== Cross-User Document Sharing =====
+
+@app.post("/api/share/user")
+async def api_share_to_user(request: Request):
+    """Share a document with another user via RSA-encrypted key exchange."""
+    s, agent = _get_user_agent(request)
+    if not user_registry:
+        raise HTTPException(500, "Server not ready")
+    token = request.cookies.get(COOKIE_NAME)
+    from_user_id = session_store.get_user_id(token)
+    if not from_user_id:
+        raise HTTPException(401, "Not authenticated")
+
+    body = await request.json()
+    doc_id = body.get("doc_id", "")
+    to_username = body.get("to_username", "").strip()
+    if not doc_id or not to_username:
+        raise HTTPException(400, "doc_id and to_username are required")
+
+    to_user = user_registry.get_by_username(to_username)
+    if not to_user:
+        raise HTTPException(404, f"User '{to_username}' not found")
+    if not to_user.public_key:
+        raise HTTPException(400, f"User '{to_username}' has no public key (legacy account)")
+    if to_user.user_id == from_user_id:
+        raise HTTPException(400, "Cannot share with yourself")
+
+    doc = agent.db.get_document(doc_id, s.keys.db_key)
+    if not doc:
+        raise HTTPException(404, "Document not found")
+    if not doc.get("file_ref"):
+        raise HTTPException(400, "Document has no file attached")
+
+    file_data, original_name = agent.file_vault.retrieve(doc["file_ref"], s.keys.file_key)
+
+    from vault.security.encryption import encrypt, rsa_encrypt
+
+    share_key = secrets.token_bytes(32)
+    encrypted_file = encrypt(file_data, share_key)
+    encrypted_share_key = rsa_encrypt(share_key, to_user.public_key)
+
+    share = user_registry.create_share(
+        from_user_id=from_user_id,
+        to_user_id=to_user.user_id,
+        doc_name=doc["name"],
+        encrypted_file_key=encrypted_share_key,
+        encrypted_file_data=encrypted_file,
+    )
+
+    return {"status": "shared", "share_id": share.share_id, "to": to_username, "doc_name": doc["name"]}
+
+
+@app.get("/api/share/inbox")
+async def api_share_inbox(request: Request):
+    """List documents shared with the current user."""
+    _require_session(request)
+    if not user_registry:
+        raise HTTPException(500, "Server not ready")
+    token = request.cookies.get(COOKIE_NAME)
+    user_id = session_store.get_user_id(token)
+    if not user_id:
+        raise HTTPException(401, "Not authenticated")
+
+    shares = user_registry.list_shares_for_user(user_id)
+    result = []
+    for sh in shares:
+        from_user = user_registry.get_by_id(sh.from_user_id)
+        result.append({
+            "share_id": sh.share_id,
+            "from_user": from_user.username if from_user else "unknown",
+            "doc_name": sh.doc_name,
+            "created_at": sh.created_at,
+        })
+    return {"shares": result}
+
+
+@app.post("/api/share/accept/{share_id}")
+async def api_share_accept(request: Request, share_id: str):
+    """Accept a shared document — decrypt with private key and import into vault."""
+    s, agent = _get_user_agent(request)
+    if not user_registry:
+        raise HTTPException(500, "Server not ready")
+    token = request.cookies.get(COOKIE_NAME)
+    user_id = session_store.get_user_id(token)
+    if not user_id:
+        raise HTTPException(401, "Not authenticated")
+    user = user_registry.get_by_id(user_id)
+    if not user:
+        raise HTTPException(401, "User not found")
+
+    share = user_registry.get_share(share_id)
+    if not share or share.to_user_id != user_id:
+        raise HTTPException(404, "Share not found")
+
+    privkey_path = user.vault_dir / "data" / ".private_key.pem"
+    if not privkey_path.exists():
+        raise HTTPException(400, "No private key found — cannot decrypt shared documents")
+
+    from vault.security.encryption import decrypt, rsa_decrypt
+
+    private_pem = privkey_path.read_bytes()
+    share_key = rsa_decrypt(share.encrypted_file_key, private_pem)
+    file_data = decrypt(share.encrypted_file_data, share_key)
+
+    file_id = agent.file_vault.store(file_data, s.keys.file_key, share.doc_name)
+    doc_id = agent.db.store_document(
+        name=f"[Shared] {share.doc_name}",
+        category="shared",
+        encryption_key=s.keys.db_key,
+        file_ref=file_id,
+    )
+
+    user_registry.delete_share(share_id)
+
+    return {"status": "accepted", "doc_id": doc_id, "doc_name": share.doc_name}
+
+
 # ===== Admin Endpoints =====
 
 def _require_admin(request: Request) -> None:

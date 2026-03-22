@@ -2185,6 +2185,8 @@ button:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important;
 .share-wa svg { color: #25d366; }
 .share-em:hover { border-color: #638dff; color: #638dff; }
 .share-em svg { color: #638dff; }
+.share-usr:hover { border-color: var(--green); color: var(--green); }
+.share-usr svg { color: var(--green); }
 
 .share-email-form {
     display: flex;
