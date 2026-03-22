@@ -1,0 +1,17 @@
+services:
+  vault:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - vault_data_local:/data
+    ports:
+      - "8080:8080"
+    environment:
+      - VAULT_DIR=/data
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - VAULT_ADMIN_KEY=test-admin-key
+      - VAULT_INVITE_ONLY=false
+      - VAULT_INSECURE=1
+
+volumes:
+  vault_data_local:

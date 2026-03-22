@@ -850,21 +850,6 @@ async def api_share_create(request: Request):
     return {"share_path": share_path, "token": token, "expires_in": expires_in}
 
 
-@app.get("/api/share/{token}")
-async def api_share_download(token: str):
-    """Download a shared document via temporary token."""
-    _cleanup_expired_tokens()
-    entry = _share_tokens.get(token)
-    if not entry:
-        raise HTTPException(404, "Share link expired or invalid")
-
-    return Response(
-        content=entry["file_data"],
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{entry["file_name"]}"'},
-    )
-
-
 @app.post("/api/share/email")
 async def api_share_email(request: Request):
     """Send a document as email attachment via SMTP."""
@@ -1141,6 +1126,21 @@ async def api_share_accept(request: Request, share_id: str):
     user_registry.delete_share(share_id)
 
     return {"status": "accepted", "doc_id": doc_id, "doc_name": share.doc_name}
+
+
+@app.get("/api/share/{token}")
+async def api_share_download(token: str):
+    """Download a shared document via temporary token (must be last /api/share route)."""
+    _cleanup_expired_tokens()
+    entry = _share_tokens.get(token)
+    if not entry:
+        raise HTTPException(404, "Share link expired or invalid")
+
+    return Response(
+        content=entry["file_data"],
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{entry["file_name"]}"'},
+    )
 
 
 # ===== Admin Endpoints =====
