@@ -1170,9 +1170,11 @@
         const modal = $('#share-modal');
         const nameEl = $('#share-doc-name');
         const emailForm = $('#share-email-form');
+        const userForm = $('#share-user-form');
         if (!modal) return;
         nameEl.textContent = docName;
-        emailForm.style.display = 'none';
+        if (emailForm) emailForm.style.display = 'none';
+        if (userForm) userForm.style.display = 'none';
         modal.classList.remove('hidden');
     }
 
@@ -1210,6 +1212,8 @@
     const shareEmailBtn = $('#share-email');
     if (shareEmailBtn) shareEmailBtn.addEventListener('click', () => {
         const emailForm = $('#share-email-form');
+        const userForm = $('#share-user-form');
+        if (userForm) userForm.style.display = 'none';
         emailForm.style.display = emailForm.style.display === 'none' ? 'flex' : 'none';
         if (emailForm.style.display !== 'none') $('#share-email-input').focus();
     });

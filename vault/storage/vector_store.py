@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -20,6 +21,12 @@ logger = logging.getLogger(__name__)
 
 QDRANT_COLLECTION = "vault_documents"
 EMBEDDING_DIM = 384  # all-MiniLM-L6-v2 output dimension
+_QDRANT_NS = uuid.UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
+
+
+def _doc_id_to_uuid(doc_id: str) -> str:
+    """Deterministic UUID from an arbitrary doc_id string (Qdrant requires UUID point IDs)."""
+    return str(uuid.uuid5(_QDRANT_NS, doc_id))
 
 
 def _get_embedding_model(model_name: str):
@@ -112,9 +119,10 @@ class VectorStore:
                 vector = self._embed([text])[0]
                 payload = metadata or {}
                 payload["_text"] = text
+                payload["_doc_id"] = doc_id
                 self._qdrant_client.upsert(
                     collection_name=QDRANT_COLLECTION,
-                    points=[PointStruct(id=doc_id, vector=vector, payload=payload)],
+                    points=[PointStruct(id=_doc_id_to_uuid(doc_id), vector=vector, payload=payload)],
                 )
             else:
                 self._chroma_collection.upsert(
@@ -141,8 +149,9 @@ class VectorStore:
                 for hit in hits:
                     payload = hit.payload or {}
                     text = payload.pop("_text", None)
+                    original_id = payload.pop("_doc_id", hit.id)
                     docs.append({
-                        "id": hit.id,
+                        "id": original_id,
                         "text": text,
                         "metadata": payload,
                         "distance": 1.0 - hit.score,
@@ -174,7 +183,7 @@ class VectorStore:
                 from qdrant_client.models import PointIdsList
                 self._qdrant_client.delete(
                     collection_name=QDRANT_COLLECTION,
-                    points_selector=PointIdsList(points=[doc_id]),
+                    points_selector=PointIdsList(points=[_doc_id_to_uuid(doc_id)]),
                 )
             else:
                 self._chroma_collection.delete(ids=[doc_id])

@@ -375,6 +375,36 @@ def restore(
     rprint("[green]Vault restored from backup. Please unlock to verify.[/green]")
 
 
+@app.command()
+def users(
+    action: str = typer.Argument("list", help="Action: list, count"),
+):
+    """Manage user accounts (admin)."""
+    from vault.users import UserRegistry
+    registry = UserRegistry(config.vault_dir)
+    registry.open()
+    try:
+        if action == "list":
+            all_users = registry.list_users()
+            if not all_users:
+                rprint("[dim]No users registered yet.[/dim]")
+                return
+            table = Table(title="Registered Users")
+            table.add_column("Username", style="cyan")
+            table.add_column("Email", style="green")
+            table.add_column("User ID", style="dim")
+            table.add_column("Created", style="dim")
+            for u in all_users:
+                table.add_row(u.username, u.email or "—", u.user_id, u.created_at[:19])
+            console.print(table)
+        elif action == "count":
+            rprint(f"Total users: [bold]{registry.user_count()}[/bold]")
+        else:
+            rprint(f"[red]Unknown action: {action}. Use 'list' or 'count'.[/red]")
+    finally:
+        registry.close()
+
+
 def main():
     app()
 
