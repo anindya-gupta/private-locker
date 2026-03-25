@@ -139,15 +139,15 @@ class VectorStore:
         try:
             if self._backend == "qdrant":
                 vector = self._embed([query])[0]
-                hits = self._qdrant_client.search(
+                result = self._qdrant_client.query_points(
                     collection_name=QDRANT_COLLECTION,
-                    query_vector=vector,
+                    query=vector,
                     limit=n_results,
                     with_payload=True,
                 )
                 docs = []
-                for hit in hits:
-                    payload = hit.payload or {}
+                for hit in result.points:
+                    payload = dict(hit.payload) if hit.payload else {}
                     text = payload.pop("_text", None)
                     original_id = payload.pop("_doc_id", hit.id)
                     docs.append({
