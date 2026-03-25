@@ -167,7 +167,7 @@ async def root(request: Request):
     s = _get_session(request)
     if s is not None:
         return RedirectResponse("/app", status_code=302)
-    return templates.TemplateResponse("landing.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="landing.html")
 
 
 @app.get("/signup", response_class=HTMLResponse)
@@ -175,7 +175,7 @@ async def signup_page(request: Request):
     s = _get_session(request)
     if s is not None:
         return RedirectResponse("/app", status_code=302)
-    return templates.TemplateResponse("setup.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="setup.html")
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -185,8 +185,7 @@ async def login_page(request: Request):
         return RedirectResponse("/app", status_code=302)
     mode = request.query_params.get("mode", "")
     password_only = mode == "lock"
-    return templates.TemplateResponse("unlock.html", {
-        "request": request,
+    return templates.TemplateResponse(request=request, name="unlock.html", context={
         "has_username": True,
         "password_only": password_only,
     })
@@ -198,7 +197,7 @@ async def app_page(request: Request, path: str = ""):
     s = _get_session(request)
     if s is None:
         return RedirectResponse("/login", status_code=302)
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="index.html")
 
 
 # ===== API Endpoints =====
